@@ -1,0 +1,6 @@
+boto3==1.40.1
+confluent-kafka==2.11.1
+mysql-connector-python==9.4.0
+pyarrow==21.0.0
+PyYAML==6.0.2
+

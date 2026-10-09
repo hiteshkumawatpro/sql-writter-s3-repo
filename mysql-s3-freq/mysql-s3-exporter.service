@@ -1,0 +1,14 @@
+[Unit]
+Description=MySQL to S3 Parquet exporter
+After=network-online.target
+
+[Service]
+Type=simple
+User=mysql-exporter
+WorkingDirectory=/opt/mysql-s3-exporter
+EnvironmentFile=/etc/mysql-s3-exporter.env
+ExecStart=/opt/mysql-s3-exporter/.venv/bin/python exporter.py
+Restart=on-failure
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

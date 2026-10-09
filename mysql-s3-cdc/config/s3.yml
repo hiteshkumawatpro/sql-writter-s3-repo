@@ -1,0 +1,16 @@
+s3:
+  bucket: your-cdc-bucket
+  prefix: mysql-cdc
+  region: ap-south-1
+  # endpoint_url: http://minio:9000
+  credentials:
+    access_key_id: ${AWS_ACCESS_KEY_ID}
+    secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+    # session_token: ${AWS_SESSION_TOKEN}
+
+sink:
+  batch_size: 1000
+  flush_seconds: 30
+  consumer_group: mysql-s3-cdc-sink-v1
+  auto_offset_reset: earliest
+

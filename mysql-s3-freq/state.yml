@@ -1,0 +1,4 @@
+tables:
+  auditLogs:
+    offset_value: 1225
+    last_read: '2026-08-04T19:02:51.332413+00:00'

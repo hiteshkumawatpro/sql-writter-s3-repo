@@ -1,0 +1,29 @@
+databases:
+  - name: 
+    driver: mysql
+    host: 127.0.0.1
+    port: 3306
+    username: debezium
+    password: replace-with-mysql-password
+    database: application_db
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5401
+    # Must be unique across every configured source.
+    topic_prefix: cdc_mysql_main
+    snapshot_mode: initial
+    connection_time_zone: Asia/Calcutta
+
+  # Add more database blocks here. Each can point to another schema or server.
+  # - name: mysql_reporting
+  #   driver: mysql
+  #   host: mysql.example.internal
+  #   port: 3306
+  #   username: debezium
+  #   password: replace-with-reporting-password
+  #   database: reporting
+  #   enabled: true
+  #   server_id: 5402
+  #   topic_prefix: cdc_mysql_reporting
+  #   snapshot_mode: initial
+

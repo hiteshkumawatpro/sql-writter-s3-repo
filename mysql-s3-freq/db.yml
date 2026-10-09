@@ -1,0 +1,58 @@
+databases:
+  - name: btpprocessaudit
+    driver: mysql
+    host: "172.31.10.99"
+    port: 3306
+    username: "root"
+    password: "ReplRoot_2026"
+    database: "btpprocessaudit"
+    enabled: true
+
+  - name: authdb
+    driver: mysql
+    host: "172.31.10.99"
+    port: 3306
+    username: "root"
+    password: "ReplRoot_2026"
+    database: "authdb"
+    enabled: true
+
+
+  - name: btpmechanicalchecksheet
+    driver: mysql
+    host: "172.31.10.99"
+    port: 3306
+    username: "root"
+    password: "ReplRoot_2026"
+    database: "btpmechanicalchecksheetbkp"
+    enabled: true
+
+
+    
+  - name: jkTechnicalChecksheet
+    driver: mysql
+    host: "172.31.10.99"
+    port: 3306
+    username: "root"
+    password: "ReplRoot_2026"
+    database: "jkTechnicalChecksheet"
+    enabled: true
+
+
+  - name: jkUnsafeObservation
+    driver: mysql
+    host: "172.31.10.99"
+    port: 3306
+    username: "root"
+    password: "ReplRoot_2026"
+    database: "jkUnsafeObservation"
+    enabled: true
+    
+s3:
+  bucket: "algo8"
+  prefix: ""
+  region: "ap-south-1"
+
+# Hard-capped at 100 by exporter.py so a Parquet file never exceeds 100 rows.
+batch_size: 100
+sleep_seconds: 60
