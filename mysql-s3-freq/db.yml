@@ -1,29 +1,29 @@
 databases:
   - name: btpprocessaudit
     driver: mysql
-    host: "172.31.10.99"
+    host: "172.26.15.16"
     port: 3306
-    username: "root"
-    password: "ReplRoot_2026"
+    username: "app_ro"
+    password: "JkRo#Logbook2026"
     database: "btpprocessaudit"
     enabled: true
 
   - name: authdb
     driver: mysql
-    host: "172.31.10.99"
+    host: "172.26.15.16"
     port: 3306
-    username: "root"
-    password: "ReplRoot_2026"
+    username: "app_ro"
+    password: "JkRo#Logbook2026"
     database: "authdb"
     enabled: true
 
 
   - name: btpmechanicalchecksheet
     driver: mysql
-    host: "172.31.10.99"
+    host: "172.26.15.16"
     port: 3306
-    username: "root"
-    password: "ReplRoot_2026"
+    username: "app_ro"
+    password: "JkRo#Logbook2026"
     database: "btpmechanicalchecksheetbkp"
     enabled: true
 
@@ -31,25 +31,27 @@ databases:
     
   - name: jkTechnicalChecksheet
     driver: mysql
-    host: "172.31.10.99"
+    host: "172.26.15.16"
     port: 3306
-    username: "root"
-    password: "ReplRoot_2026"
+    username: "app_ro"
+    password: "JkRo#Logbook2026"
     database: "jkTechnicalChecksheet"
     enabled: true
 
 
   - name: jkUnsafeObservation
     driver: mysql
-    host: "172.31.10.99"
+    host: "172.26.15.16"
     port: 3306
-    username: "root"
-    password: "ReplRoot_2026"
+    username: "app_ro"
+    password: "JkRo#Logbook2026"
     database: "jkUnsafeObservation"
     enabled: true
     
 s3:
-  bucket: "algo8"
+  bucket: "${S3_BUCKET}"
+  access_key_id: "${AWS_ACCESS_KEY_ID}"
+  secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
   prefix: ""
   region: "ap-south-1"
 

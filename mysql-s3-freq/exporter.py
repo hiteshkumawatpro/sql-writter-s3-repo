@@ -753,17 +753,13 @@ def export_table(
 def create_s3_client(
     s3_config: dict[str, Any],
 ):
-    """
-    Create an S3 client using the normal AWS credential chain.
-
-    Supported credential sources include:
-    - EC2 IAM role
-    - AWS profile
-    - AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-    """
+    """Create an S3 client using credentials configured in db.yml."""
     import boto3
 
-    arguments = {}
+    arguments = {
+        "aws_access_key_id": s3_config["access_key_id"],
+        "aws_secret_access_key": s3_config["secret_access_key"],
+    }
 
     if s3_config.get("region"):
         arguments["region_name"] = s3_config["region"]
@@ -775,6 +771,7 @@ def create_s3_client(
         "s3",
         **arguments,
     )
+
 
 
 def load_table_jobs(
@@ -913,6 +910,16 @@ def main() -> None:
     if not s3_config.get("bucket"):
         raise ValueError(
             "s3.bucket is required."
+        )
+
+    if not s3_config.get("access_key_id"):
+        raise ValueError(
+            "s3.access_key_id is required."
+        )
+
+    if not s3_config.get("secret_access_key"):
+        raise ValueError(
+            "s3.secret_access_key is required."
         )
 
     configured_batch_size = int(

@@ -37,7 +37,7 @@ tables:
   store_key: runStartedAt
   offset_column: id
   offset_value: 4635
-  last_read: '2026-10-09T07:59:39.603916+00:00'
+  last_read: '2026-10-11T21:01:27.248035+00:00'
   enabled: true
 - order: 5
   source: btpprocessaudit
@@ -57,7 +57,7 @@ tables:
   store_key: runDate
   offset_column: id
   offset_value: 17289
-  last_read: '2026-10-09T07:59:39.785110+00:00'
+  last_read: '2026-10-11T21:01:27.411915+00:00'
   enabled: true
 - order: 7
   source: btpprocessaudit
@@ -107,7 +107,7 @@ tables:
   store_key: startedAt
   offset_column: id
   offset_value: 6296
-  last_read: '2026-10-09T07:59:39.970867+00:00'
+  last_read: '2026-10-11T21:01:27.576728+00:00'
   enabled: true
 - order: 12
   source: btpprocessaudit
@@ -117,7 +117,7 @@ tables:
   store_key: createdAt
   offset_column: machineId
   offset_value: 597
-  last_read: '2026-10-09T07:59:40.156383+00:00'
+  last_read: '2026-10-11T21:01:27.747204+00:00'
   enabled: true
 - order: 13
   source: btpprocessaudit
@@ -127,7 +127,7 @@ tables:
   store_key: createdAt
   offset_column: id
   offset_value: 88
-  last_read: '2026-10-09T07:59:40.358652+00:00'
+  last_read: '2026-10-11T21:01:27.925358+00:00'
   enabled: true
 - order: 14
   source: btpprocessaudit
@@ -177,7 +177,7 @@ tables:
   store_key: null
   offset_column: id
   offset_value: 38495
-  last_read: '2026-10-09T07:59:40.530813+00:00'
+  last_read: '2026-10-11T21:01:28.108219+00:00'
   enabled: true
 - order: 19
   source: btpprocessaudit
@@ -207,7 +207,7 @@ tables:
   store_key: timestamp
   offset_column: violationId
   offset_value: 5395
-  last_read: '2026-10-09T07:59:40.717446+00:00'
+  last_read: '2026-10-11T21:01:28.281925+00:00'
   enabled: true
 - order: 22
   source: authdb
@@ -267,7 +267,7 @@ tables:
   store_key: created_at
   offset_column: id
   offset_value: 2360
-  last_read: '2026-10-09T07:59:40.914428+00:00'
+  last_read: '2026-10-11T21:01:28.447552+00:00'
   enabled: true
 - order: 28
   source: authdb
@@ -277,7 +277,7 @@ tables:
   store_key: created_at
   offset_column: id
   offset_value: 177
-  last_read: '2026-10-09T07:59:41.091215+00:00'
+  last_read: '2026-10-11T21:01:28.612342+00:00'
   enabled: true
 - order: 29
   source: authdb
@@ -497,7 +497,7 @@ tables:
   store_key: runStartedAt
   offset_column: id
   offset_value: 12357
-  last_read: '2026-10-09T07:59:41.288837+00:00'
+  last_read: '2026-10-11T21:01:28.819866+00:00'
   enabled: true
 - order: 51
   source: btpmechanicalchecksheet
@@ -517,7 +517,7 @@ tables:
   store_key: runDate
   offset_column: id
   offset_value: 867642
-  last_read: '2026-10-09T07:59:41.462932+00:00'
+  last_read: '2026-10-11T21:01:28.989277+00:00'
   enabled: true
 - order: 53
   source: btpmechanicalchecksheet
@@ -557,7 +557,7 @@ tables:
   store_key: startedAt
   offset_column: id
   offset_value: 14334
-  last_read: '2026-10-09T07:59:41.651779+00:00'
+  last_read: '2026-10-11T21:01:29.156429+00:00'
   enabled: true
 - order: 57
   source: btpmechanicalchecksheet
@@ -567,7 +567,7 @@ tables:
   store_key: createdAt
   offset_column: machineId
   offset_value: 1355
-  last_read: '2026-10-09T07:59:41.822851+00:00'
+  last_read: '2026-10-11T21:01:29.320449+00:00'
   enabled: true
 - order: 58
   source: btpmechanicalchecksheet
@@ -577,7 +577,7 @@ tables:
   store_key: createdAt
   offset_column: id
   offset_value: 946
-  last_read: '2026-10-09T07:59:42.073968+00:00'
+  last_read: '2026-10-11T21:01:29.484445+00:00'
   enabled: true
 - order: 59
   source: btpmechanicalchecksheet
@@ -617,7 +617,7 @@ tables:
   store_key: lastCheckedOn
   offset_column: id
   offset_value: 161902
-  last_read: '2026-10-09T07:59:42.271765+00:00'
+  last_read: '2026-10-11T21:01:29.654664+00:00'
   enabled: true
 - order: 63
   source: btpmechanicalchecksheet
@@ -657,7 +657,7 @@ tables:
   store_key: timestamp
   offset_column: violationId
   offset_value: 671
-  last_read: '2026-10-09T07:59:42.445024+00:00'
+  last_read: '2026-10-11T21:01:29.819637+00:00'
   enabled: true
 - order: 67
   source: btpmechanicalchecksheet
@@ -697,7 +697,7 @@ tables:
   store_key: createdAt
   offset_column: id
   offset_value: 196778
-  last_read: '2026-10-09T07:59:42.690371+00:00'
+  last_read: '2026-10-11T21:01:30.071338+00:00'
   enabled: true
 - order: 71
   source: jkTechnicalChecksheet
@@ -707,7 +707,7 @@ tables:
   store_key: createdAt
   offset_column: id
   offset_value: 799
-  last_read: '2026-10-09T07:59:42.855119+00:00'
+  last_read: '2026-10-11T21:01:30.237252+00:00'
   enabled: true
 - order: 72
   source: jkTechnicalChecksheet
@@ -767,7 +767,7 @@ tables:
   store_key: runStartedAt
   offset_column: id
   offset_value: 2522
-  last_read: '2026-10-09T07:59:43.033035+00:00'
+  last_read: '2026-10-11T21:01:30.407981+00:00'
   enabled: true
 - order: 78
   source: jkTechnicalChecksheet
@@ -807,7 +807,7 @@ tables:
   store_key: runDate
   offset_column: id
   offset_value: 6708
-  last_read: '2026-10-09T07:59:43.215757+00:00'
+  last_read: '2026-10-11T21:01:30.611873+00:00'
   enabled: true
 - order: 82
   source: jkTechnicalChecksheet
@@ -847,7 +847,7 @@ tables:
   store_key: startedAt
   offset_column: id
   offset_value: 3744
-  last_read: '2026-10-09T07:59:43.415611+00:00'
+  last_read: '2026-10-11T21:01:30.777160+00:00'
   enabled: true
 - order: 86
   source: jkTechnicalChecksheet
@@ -867,7 +867,7 @@ tables:
   store_key: createdAt
   offset_column: machineId
   offset_value: 3564
-  last_read: '2026-10-09T07:59:43.613763+00:00'
+  last_read: '2026-10-11T21:01:30.946312+00:00'
   enabled: true
 - order: 88
   source: jkTechnicalChecksheet
@@ -877,7 +877,7 @@ tables:
   store_key: createdAt
   offset_column: id
   offset_value: 291
-  last_read: '2026-10-09T07:59:43.788507+00:00'
+  last_read: '2026-10-11T21:01:31.113698+00:00'
   enabled: true
 - order: 89
   source: jkTechnicalChecksheet
@@ -957,7 +957,7 @@ tables:
   store_key: null
   offset_column: id
   offset_value: 27824
-  last_read: '2026-10-09T07:59:43.994422+00:00'
+  last_read: '2026-10-11T21:01:31.287311+00:00'
   enabled: true
 - order: 97
   source: jkTechnicalChecksheet
@@ -987,7 +987,7 @@ tables:
   store_key: timestamp
   offset_column: violationId
   offset_value: 1092
-  last_read: '2026-10-09T07:59:44.170626+00:00'
+  last_read: '2026-10-11T21:01:31.451578+00:00'
   enabled: true
 - order: 100
   source: jkTechnicalChecksheet
@@ -1167,7 +1167,7 @@ tables:
   store_key: timestamp
   offset_column: violationId
   offset_value: 43
-  last_read: '2026-10-09T07:59:44.345276+00:00'
+  last_read: '2026-10-11T21:01:31.618875+00:00'
   enabled: true
 - order: 118
   source: jkUnsafeObservation
