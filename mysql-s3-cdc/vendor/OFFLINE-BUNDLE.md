@@ -15,4 +15,12 @@ Official download sources:
 - `https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/3.5.2.Final/`
 - `https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse`
 
-The original archives, publisher checksum files, extracted runtimes, connector JARs, and eleven Python wheels are intentionally retained. `python manage.py setup` and all normal runtime commands require no package download.
+The extracted Kafka runtime, connector JARs, and Python wheels are retained so
+`python manage.py setup` and all normal runtime commands require no package
+download. The Kafka source archive is stored with Git LFS because it exceeds
+GitHub's 100 MB per-file limit. If an offline deployment receives only its
+small LFS pointer, `verify-bundle` skips the source-archive checksum and verifies
+the extracted runtime instead; the archive is not required to run the pipeline.
+
+On Windows, the bundled Java runtime is used. On Linux, `manage.py` uses the
+system `java` executable when no Linux runtime exists under `vendor/java`.

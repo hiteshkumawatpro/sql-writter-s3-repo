@@ -1,3 +1,2 @@
 /mysql-s3-cdc/vendor/archives/kafka_2.13-4.1.2.tgz filter=lfs diff=lfs merge=lfs -text
 /mysql-s3-cdc/vendor/java/jdk-21.0.12.1+1-jre/lib/modules filter=lfs diff=lfs merge=lfs -text
-/mysql-s3-cdc/vendor/kafka/kafka_2.13-4.1.2/libs/rocksdbjni-9.7.3.jar filter=lfs diff=lfs merge=lfs -text

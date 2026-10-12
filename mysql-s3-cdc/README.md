@@ -16,7 +16,10 @@ After this repository has been copied to a machine, normal setup and operation r
 - Eleven pinned Python wheels in `vendor/python-wheels/`.
 - Original archives and publisher checksum files in `vendor/archives/`.
 
-See [vendor/OFFLINE-BUNDLE.md](vendor/OFFLINE-BUNDLE.md) for versions, sources, and verified hashes. `python manage.py verify-bundle` rechecks the Kafka archive.
+See [vendor/OFFLINE-BUNDLE.md](vendor/OFFLINE-BUNDLE.md) for versions, sources,
+and verified hashes. `python manage.py verify-bundle` checks the extracted
+runtime and rechecks the Kafka source archive when its Git LFS payload is
+available.
 
 There are no Docker files or Docker runtime dependencies.
 

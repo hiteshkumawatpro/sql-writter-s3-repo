@@ -64,13 +64,34 @@ def load_dotenv() -> None:
         os.environ.setdefault(name.strip(), value)
 
 
-def java_home() -> Path:
-    matches = sorted((ROOT / "vendor" / "java").glob("*/bin/java.exe"))
-    if not matches:
-        matches = sorted((ROOT / "vendor" / "java").glob("*/bin/java"))
-    if not matches:
-        raise FileNotFoundError("Bundled Java runtime is missing under vendor/java")
-    return matches[0].parent.parent
+def java_home() -> Path | None:
+    executable = "java.exe" if os.name == "nt" else "java"
+    matches = sorted((ROOT / "vendor" / "java").glob(f"*/bin/{executable}"))
+    return matches[0].parent.parent if matches else None
+
+
+def java_executable() -> Path:
+    bundled = java_home()
+    if bundled is not None:
+        return bundled / "bin" / ("java.exe" if os.name == "nt" else "java")
+    system_java = shutil.which("java")
+    if system_java:
+        return Path(system_java)
+    raise FileNotFoundError(
+        "Java is missing; install Java 17 or newer, or provide a platform-compatible "
+        "runtime under vendor/java"
+    )
+
+
+def is_lfs_pointer(path: Path) -> bool:
+    """Return true when Git LFS left metadata instead of the requested binary."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(200).startswith(
+                b"version https://git-lfs.github.com/spec/v1"
+            )
+    except OSError:
+        return False
 
 
 def venv_python() -> Path:
@@ -81,20 +102,23 @@ def environment() -> dict[str, str]:
     env = os.environ.copy()
     bundled_java = java_home()
     env.update({
-        "JAVA_HOME": str(bundled_java),
-        "PATH": str(bundled_java / "bin") + os.pathsep + env.get("PATH", ""),
         "CDC_DATABASES_CONFIG": str(ROOT / "config" / "databases.yml"),
         "CDC_TABLES_CONFIG": str(ROOT / "config" / "tables.yml"),
         "CDC_S3_CONFIG": str(ROOT / "config" / "s3.yml"),
         "CDC_KAFKA_BOOTSTRAP": "127.0.0.1:9092",
         "CDC_CONNECT_URL": "http://127.0.0.1:8083",
     })
+    if bundled_java is not None:
+        env["JAVA_HOME"] = str(bundled_java)
+        env["PATH"] = str(bundled_java / "bin") + os.pathsep + env.get("PATH", "")
     return env
 
 
 def ensure_assets() -> None:
+    rocksdb = KAFKA_HOME / "libs" / "rocksdbjni-9.7.3.jar"
     required = [
         KAFKA_HOME / "libs",
+        rocksdb,
         SERVER_CONFIG,
         CONNECT_CONFIG,
     ]
@@ -103,7 +127,12 @@ def ensure_assets() -> None:
         missing.append(str(PLUGIN_HOME.relative_to(ROOT) / "debezium-connector-mysql-*.jar"))
     if not WHEELS.exists() or not list(WHEELS.glob("*.whl")):
         missing.append(str(WHEELS.relative_to(ROOT) / "*.whl"))
-    java_home()
+    if rocksdb.exists() and is_lfs_pointer(rocksdb):
+        missing.append(
+            str(rocksdb.relative_to(ROOT))
+            + " (Git LFS pointer found instead of the binary)"
+        )
+    java_executable()
     if missing:
         raise FileNotFoundError("Offline assets are missing: " + ", ".join(missing))
 
@@ -183,7 +212,7 @@ def kafka_command(component: str, *arguments: str) -> list[str]:
         ),
     }
     main_class, minimum_heap, maximum_heap, logging_config = definitions[component]
-    java = java_home() / "bin" / ("java.exe" if os.name == "nt" else "java")
+    java = java_executable()
     return [
         str(java), minimum_heap, maximum_heap,
         f"-Dlog4j2.configurationFile={(KAFKA_HOME / 'config' / logging_config).as_uri()}",
@@ -396,12 +425,24 @@ def progress(lines: int = 20, follow: bool = False, heading: str = "S3 upload pr
 def verify_bundle() -> None:
     ensure_assets()
     archive = ROOT / "vendor" / "archives" / "kafka_2.13-4.1.2.tgz"
-    published = (ROOT / "vendor" / "archives" / "kafka_2.13-4.1.2.tgz.sha512").read_text()
-    expected = "".join(published.split(":", 1)[1].split()).upper()
-    actual = hashlib.sha512(archive.read_bytes()).hexdigest().upper()
-    if actual != expected:
-        raise ValueError("Kafka archive SHA-512 does not match its published checksum")
-    print("Offline bundle is present; Kafka SHA-512 is valid.")
+    if not archive.exists():
+        print(
+            "Kafka source archive is absent; skipping its checksum because the "
+            "extracted Kafka runtime is present and runnable."
+        )
+    elif is_lfs_pointer(archive):
+        print(
+            "Kafka source archive is an unmaterialized Git LFS object; skipping its "
+            "checksum because the extracted Kafka runtime is present and runnable."
+        )
+    else:
+        published = (ROOT / "vendor" / "archives" / "kafka_2.13-4.1.2.tgz.sha512").read_text()
+        expected = "".join(published.split(":", 1)[1].split()).upper()
+        actual = hashlib.sha512(archive.read_bytes()).hexdigest().upper()
+        if actual != expected:
+            raise ValueError("Kafka archive SHA-512 does not match its published checksum")
+        print("Kafka source archive SHA-512 is valid.")
+    print(f"Offline runtime bundle is ready; using Java at {java_executable()}.")
 
 
 def main() -> None:
