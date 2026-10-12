@@ -51,6 +51,12 @@ Put MySQL passwords directly in [config/databases.yml](config/databases.yml). Us
 
 Because `databases.yml` now contains plaintext passwords, do not commit or distribute it without removing the secrets. The S3 `credentials` section can be removed to use the normal AWS SDK credential chain instead. Kafka Connect also stores resolved database credentials in its local internal Kafka topic, so protect the repository's `runtime/` directory.
 
+`ssl_mode` controls the Debezium-to-MySQL connection. Supported values are
+`disabled`, `preferred`, `required`, `verify_ca`, and `verify_identity`. This
+configuration uses `disabled` because the current private-network MySQL endpoint
+resets TLS negotiation. Prefer `verify_identity` with a trusted certificate when
+TLS is configured on MySQL; `disabled` sends database traffic unencrypted.
+
 ## 3. Offline setup and validation
 
 The setup command creates `.venv` and installs packages only from `vendor/python-wheels` using pip `--no-index`:
@@ -64,9 +70,25 @@ python manage.py setup
 
 Discovery connects to every enabled MySQL database and appends only new tables. Existing entries and settings are preserved; new tables default to `enabled: false`.
 
+Before listing tables, discovery checks that binary logging is enabled with
+`binlog_format=ROW` and `binlog_row_image=FULL`, and that the configured user
+advertises the required CDC grants. A database that cannot connect or is not
+CDC-ready is logged as `WARNING` and skipped; other configured databases still
+continue. Existing entries for a skipped source are never deleted or changed.
+
 ```powershell
 python manage.py discover
 ```
+
+By default, newly discovered tables are disabled for review. To enable every
+newly discovered table immediately, use:
+
+```powershell
+python manage.py discover --enable-new
+```
+
+`--enable-new` affects only tables appended by that run. Existing entries and
+their current `enabled`, operation, partition, and S3-key settings are preserved.
 
 Example table entry:
 
@@ -99,10 +121,26 @@ One entry point controls the complete native stack:
 ```powershell
 python manage.py start
 python manage.py status
+python manage.py progress --lines 20
+python manage.py progress --follow
 python manage.py sync
 python manage.py restart
 python manage.py stop
 ```
+
+To stop the pipeline and permanently erase the local Kafka records,
+consumer/connector offsets, Debezium schema history, runtime logs, and PID files:
+
+```powershell
+python manage.py fresh-start --yes
+```
+
+The confirmation flag is mandatory. This command preserves YAML configuration,
+credentials, source databases, and existing S3 objects, and leaves all services
+stopped. Run `python manage.py start` later to create a new Kafka state. Because
+offsets were deleted, Debezium then performs fresh snapshots and existing rows
+can be archived to S3 again. Use `restart` instead when Kafka state and offsets
+must be retained.
 
 `start` performs these actions in order:
 
@@ -113,7 +151,55 @@ python manage.py stop
 5. Applies the configured MySQL connectors.
 6. Starts the S3 sink.
 
-Logs are written to `runtime/logs/kafka.log`, `connect.log`, and `sink.log`. PIDs are tracked in `runtime/pids/`. `stop` preserves Kafka records, connector offsets, and schema history under `runtime/kafka-data/`.
+Logs are written under `runtime/logs/`:
+
+- `kafka.log`: Kafka broker startup and runtime messages.
+- `connect.log`: Kafka Connect and Debezium connector/task errors.
+- `sink.log`: Kafka consumption and S3 upload messages.
+- `watchdog.log`: automatic recovery attempts for failed Debezium tasks.
+- `manager.log`: validation, connector application, status, and startup errors.
+
+Every successful object upload is logged with its CDC row count, full S3 URI,
+Kafka topic, partition, and offset range, for example:
+
+```text
+2026-10-12 06:59:07,960 | INFO | KafkaS3Archive | Uploaded 3 CDC rows to s3://bucket/prefix/table/year=2026/month=10/day=12/part-p00000-o00000000000000000100-00000000000000000102.parquet [topic=source.database.table partition=0 offsets=100-102]
+```
+
+`status` includes the five latest S3 activity lines. Use
+`python manage.py progress --follow` for a live filtered view. When hosted as a
+systemd service, `journalctl -u <service-name> -f` shows the same sink output if
+the service sends stdout/stderr to the journal.
+
+PIDs are tracked in `runtime/pids/`. `stop` preserves Kafka records, connector
+offsets, and schema history under `runtime/kafka-data/`.
+
+Connector application is isolated per database. A MySQL source that times out
+or fails Debezium validation is logged and skipped while other connectors and
+the S3 sink continue starting. Run `python manage.py status` afterward because
+a connector accepted by the REST API can still fail asynchronously.
+The manager waits for applied tasks and retries transient `FAILED` task states
+for a bounded startup period; a persistently unavailable source is logged and
+does not prevent other sources from running. While the stack is running, the
+watchdog checks managed connector tasks every 30 seconds and restarts only tasks
+in `FAILED` state.
+
+Only sources having at least one enabled table whose `source` and `database`
+exactly match `databases.yml` receive a Debezium connector. `sync` removes stale
+managed connectors for renamed sources and sources with no matching enabled
+tables, preventing unwanted topics and CDC reads. Debezium schema history is
+also restricted to those captured tables; it does not scan schema metadata for
+every database visible to the MySQL account during startup. After applying a
+configuration, `sync` also restarts any task that was already in `FAILED` state.
+
+During an initial snapshot, an enabled table topic might not exist immediately.
+The S3 sink logs that it is waiting and keeps polling until Debezium creates the
+topic; this condition does not stop the pipeline.
+
+S3 upload failures are logged and retried after `sink.upload_retry_seconds`;
+Kafka offsets are not committed and the pending batch is retained. Startup
+validation rejects example bucket names, so `s3.bucket` must name an existing
+bucket in the configured region.
 
 ## S3 output and ordering
 

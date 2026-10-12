@@ -15,6 +15,7 @@ ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 DATABASES_PATH = Path(os.getenv("CDC_DATABASES_CONFIG", "config/databases.yml"))
 TABLES_PATH = Path(os.getenv("CDC_TABLES_CONFIG", "config/tables.yml"))
 S3_PATH = Path(os.getenv("CDC_S3_CONFIG", "config/s3.yml"))
+ENV_PATH = Path(os.getenv("CDC_ENV_FILE", ".env"))
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,24 @@ def _expand(value: Any) -> Any:
     return value
 
 
+def load_environment_file() -> None:
+    """Load repository-local environment values for every Python entry point."""
+    if not ENV_PATH.exists():
+        return
+    for raw_line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(name.strip(), value)
+
+
 def load_yaml(path: Path, expand_environment: bool = True) -> dict[str, Any]:
+    if expand_environment:
+        load_environment_file()
     with path.open(encoding="utf-8") as handle:
         document = yaml.safe_load(handle) or {}
     if not isinstance(document, dict):
@@ -82,6 +100,12 @@ def load_databases(expand_environment: bool = True) -> list[dict[str, Any]]:
             raise ValueError(f"Database entry #{index} is missing: {', '.join(missing)}")
         if str(db.get("driver", "mysql")).lower() != "mysql":
             raise ValueError("Only the mysql driver is currently supported")
+        ssl_mode = str(db.get("ssl_mode", "preferred")).lower()
+        if ssl_mode not in {"disabled", "preferred", "required", "verify_ca", "verify_identity"}:
+            raise ValueError(
+                f"Database entry #{index} ssl_mode must be disabled, preferred, "
+                "required, verify_ca, or verify_identity"
+            )
         name = str(db["name"])
         prefix = str(db["topic_prefix"])
         server_id = int(db["server_id"])
@@ -142,22 +166,39 @@ def load_s3() -> dict[str, Any]:
     sink = document.get("sink", {})
     if not isinstance(s3, dict) or not s3.get("bucket"):
         raise ValueError("s3.yml must contain s3.bucket")
+    if str(s3["bucket"]).strip().lower() in {"your-cdc-bucket", "your-bucket-name"}:
+        raise ValueError("Replace the placeholder s3.bucket in s3.yml with an existing bucket")
     if not isinstance(sink, dict):
         raise ValueError("s3.yml sink must be an object")
-    if int(sink.get("batch_size", 1000)) <= 0 or float(sink.get("flush_seconds", 30)) <= 0:
-        raise ValueError("sink.batch_size and sink.flush_seconds must be positive")
+    if (
+        int(sink.get("batch_size", 1000)) <= 0
+        or float(sink.get("flush_seconds", 30)) <= 0
+        or float(sink.get("upload_retry_seconds", 30)) <= 0
+    ):
+        raise ValueError(
+            "sink.batch_size, sink.flush_seconds, and sink.upload_retry_seconds must be positive"
+        )
     document["sink"] = sink
     return document
 
 
-def validate_all() -> None:
+def validate_all() -> list[str]:
     databases = load_databases()
     tables = load_tables()
     load_s3()
     sources = {str(db["name"]): str(db["database"]) for db in databases}
+    warnings = []
     for table in tables:
         if table.source not in sources:
-            raise ValueError(f"Table {table.source}.{table.table} refers to an unknown/disabled source")
-        if table.database != sources[table.source]:
-            raise ValueError(f"Table {table.source}.{table.table} has a database mismatch")
+            warnings.append(
+                f"Table {table.source}.{table.table} is ignored because its "
+                "database source is unknown or disabled"
+            )
+        elif table.database != sources[table.source]:
+            warnings.append(
+                f"Table {table.source}.{table.table} is ignored because its "
+                f"database is {table.database!r}, but the source is configured "
+                f"for {sources[table.source]!r}"
+            )
+    return warnings
 

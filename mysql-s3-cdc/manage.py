@@ -5,13 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -26,6 +30,23 @@ VENV = ROOT / ".venv"
 SERVER_CONFIG = ROOT / "config" / "kafka" / "server.properties"
 CONNECT_CONFIG = ROOT / "config" / "kafka" / "connect-distributed.properties"
 CLUSTER_ID = "MkU3OEVBNTcwNTJENDM2Qk"
+
+
+def manager_log(message: str) -> None:
+    """Append management activity to a persistent local log."""
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with (LOGS / "manager.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} {message}\n")
+    except OSError:
+        # Logging must never prevent validation, startup, or shutdown.
+        pass
+
+
+def manager_message(message: str, *, error: bool = False) -> None:
+    print(message, file=sys.stderr if error else sys.stdout, flush=True)
+    manager_log(("ERROR " if error else "INFO ") + message)
 
 
 def load_dotenv() -> None:
@@ -107,8 +128,48 @@ def ensure_venv() -> None:
 def python_command(*arguments: str, check: bool = True) -> subprocess.CompletedProcess:
     ensure_venv()
     command = [str(venv_python()), *arguments]
-    print("+", " ".join(command), flush=True)
-    return subprocess.run(command, cwd=ROOT, env=environment(), check=check)
+    manager_message("+ " + " ".join(command))
+    output_lines: list[str] = []
+    log = None
+    try:
+        log = (LOGS / "manager.log").open("a", encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            env=environment(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            if log is not None:
+                log.write(line)
+                log.flush()
+            output_lines.append(line)
+        return_code = process.wait()
+    finally:
+        if log is not None:
+            log.close()
+    result = subprocess.CompletedProcess(
+        command,
+        return_code,
+        stdout="".join(output_lines),
+        stderr=None,
+    )
+    if check and return_code:
+        raise subprocess.CalledProcessError(
+            return_code,
+            command,
+            output=result.stdout,
+        )
+    return result
 
 
 def kafka_command(component: str, *arguments: str) -> list[str]:
@@ -187,13 +248,22 @@ def wait_for_port(port: int, timeout: int, service: str) -> None:
 
 
 def wait_for_connect(timeout: int = 180) -> None:
+    manager_message("Waiting for the Kafka Connect REST API on 127.0.0.1:8083...")
     deadline = time.monotonic() + timeout
+    attempts = 0
     while time.monotonic() < deadline:
+        attempts += 1
         try:
             with urllib.request.urlopen("http://127.0.0.1:8083/connectors", timeout=2) as response:
                 if response.status == 200:
+                    manager_message("Kafka Connect REST API is ready.")
                     return
-        except (OSError, urllib.error.HTTPError):
+        except (OSError, urllib.error.HTTPError) as exc:
+            if attempts == 1 or attempts % 15 == 0:
+                manager_log(
+                    "INFO Kafka Connect REST API is not ready yet: "
+                    f"{type(exc).__name__}: {exc}"
+                )
             time.sleep(1)
     raise TimeoutError("Kafka Connect REST API was not ready; check runtime/logs/connect.log")
 
@@ -235,6 +305,7 @@ def stop_process(name: str) -> None:
 
 
 def start() -> None:
+    manager_message("Starting the MySQL CDC pipeline.")
     ensure_venv()
     python_command("-m", "cdc.cli", "validate")
     format_kafka()
@@ -243,15 +314,83 @@ def start() -> None:
     launch("connect", kafka_command("connect", str(CONNECT_CONFIG)))
     wait_for_connect()
     python_command("-m", "cdc.cli", "apply", "--wait")
+    launch("watchdog", [str(venv_python()), "-m", "cdc.watchdog"])
     launch("sink", [str(venv_python()), "-m", "cdc.sink"])
-    print("CDC stack is running without Docker. Use `python manage.py status` to inspect it.")
+    manager_message(
+        "CDC stack startup completed. Use `python manage.py status` to "
+        "inspect connector and task state."
+    )
+
+
+def fresh_start() -> None:
+    """Stop CDC and erase local runtime state without restarting services."""
+    manager_message("Stopping the CDC pipeline and resetting local Kafka state.")
+    for service in ("sink", "watchdog", "connect", "kafka"):
+        stop_process(service)
+
+    runtime = RUNTIME.resolve()
+    targets = (RUNTIME / "kafka-data", LOGS, PIDS)
+    for target in targets:
+        resolved = target.resolve()
+        if resolved.parent != runtime:
+            raise RuntimeError(f"Refusing to reset path outside runtime: {resolved}")
+        if resolved.exists():
+            def remove_readonly(function, path, _exc_info):
+                os.chmod(path, stat.S_IWRITE)
+                function(path)
+
+            shutil.rmtree(resolved, onerror=remove_readonly)
+        resolved.mkdir(parents=True, exist_ok=True)
+        print(f"Reset {resolved.relative_to(ROOT)}")
+
+    print(
+        "Local Kafka records, consumer offsets, schema history, logs, and PID "
+        "files were deleted. Configuration and S3 objects were preserved. "
+        "All CDC services remain stopped; run `python manage.py start` when ready.",
+        flush=True,
+    )
 
 
 def status() -> None:
-    for name in ("kafka", "connect", "sink"):
+    for name in ("kafka", "connect", "watchdog", "sink"):
         print(f"{name}: {'RUNNING' if is_running(name) else 'STOPPED'}")
     if is_running("connect"):
         python_command("-m", "cdc.cli", "status", check=False)
+    progress(lines=5, follow=False, heading="Recent S3 activity")
+
+
+def progress(lines: int = 20, follow: bool = False, heading: str = "S3 upload progress") -> None:
+    """Print recent S3 sink activity and optionally follow new log entries."""
+    path = LOGS / "sink.log"
+    if not path.exists():
+        print(f"No sink log exists yet: {path.relative_to(ROOT)}")
+        return
+
+    def relevant(line: str) -> bool:
+        return "Uploaded " in line or "S3 flush failed" in line
+
+    recent: deque[str] = deque(maxlen=lines)
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if relevant(line):
+                recent.append(line.rstrip())
+        if recent:
+            print(f"{heading}:")
+            for line in recent:
+                print(line)
+        else:
+            print("No successful S3 uploads have been logged yet.")
+        if not follow:
+            return
+
+        print("Following S3 activity; press Ctrl+C to stop.", flush=True)
+        while True:
+            line = handle.readline()
+            if line:
+                if relevant(line):
+                    print(line.rstrip(), flush=True)
+            else:
+                time.sleep(0.5)
 
 
 def verify_bundle() -> None:
@@ -273,8 +412,37 @@ def main() -> None:
     subparsers.add_parser("start", help="Start Kafka, Connect/Debezium, and the S3 sink.")
     subparsers.add_parser("stop", help="Stop all native services without deleting offsets/data.")
     subparsers.add_parser("restart", help="Stop and start all native services.")
+    fresh_parser = subparsers.add_parser(
+        "fresh-start",
+        help="Delete all local Kafka state/logs and leave services stopped.",
+    )
+    fresh_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm permanent deletion of local Kafka data, offsets, and logs.",
+    )
     subparsers.add_parser("status", help="Show native process and connector state.")
-    subparsers.add_parser("discover", help="Append newly discovered tables.")
+    progress_parser = subparsers.add_parser(
+        "progress",
+        help="Show recent S3 uploads and optionally follow them live.",
+    )
+    progress_parser.add_argument(
+        "--lines", type=int, default=20,
+        help="Number of recent upload/error lines to show (default: 20).",
+    )
+    progress_parser.add_argument(
+        "--follow", "-f", action="store_true",
+        help="Continue printing new S3 upload/error lines.",
+    )
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Append newly discovered tables.",
+    )
+    discover_parser.add_argument(
+        "--enable-new",
+        action="store_true",
+        help="Enable newly discovered tables; existing entries are unchanged.",
+    )
     subparsers.add_parser("sync", help="Validate and apply Debezium connectors.")
     subparsers.add_parser("validate", help="Validate all YAML configuration.")
     subparsers.add_parser("verify-bundle", help="Check required offline files and Kafka checksum.")
@@ -286,16 +454,30 @@ def main() -> None:
         elif args.command == "start":
             start()
         elif args.command == "stop":
-            for service in ("sink", "connect", "kafka"):
+            for service in ("sink", "watchdog", "connect", "kafka"):
                 stop_process(service)
         elif args.command == "restart":
-            for service in ("sink", "connect", "kafka"):
+            for service in ("sink", "watchdog", "connect", "kafka"):
                 stop_process(service)
             start()
+        elif args.command == "fresh-start":
+            if not args.yes:
+                raise ValueError(
+                    "fresh-start permanently deletes local Kafka records, offsets, "
+                    "schema history, and runtime logs; rerun with --yes to confirm"
+                )
+            fresh_start()
         elif args.command == "status":
             status()
+        elif args.command == "progress":
+            if args.lines <= 0:
+                raise ValueError("progress --lines must be positive")
+            progress(lines=args.lines, follow=args.follow)
         elif args.command == "discover":
-            python_command("-m", "cdc.cli", "discover")
+            command = ["-m", "cdc.cli", "discover"]
+            if args.enable_new:
+                command.append("--enable-new")
+            python_command(*command)
         elif args.command == "sync":
             python_command("-m", "cdc.cli", "validate")
             python_command("-m", "cdc.cli", "apply", "--wait")
@@ -303,8 +485,11 @@ def main() -> None:
             python_command("-m", "cdc.cli", "validate")
         elif args.command == "verify-bundle":
             verify_bundle()
+    except KeyboardInterrupt:
+        manager_message("Command interrupted by the user.", error=True)
+        raise SystemExit(130)
     except (FileNotFoundError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError, TimeoutError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        manager_message(str(exc), error=True)
         raise SystemExit(1) from exc
 
 

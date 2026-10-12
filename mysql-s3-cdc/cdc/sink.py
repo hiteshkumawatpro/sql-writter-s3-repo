@@ -19,20 +19,53 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from confluent_kafka import Consumer, KafkaError, TopicPartition
 
-from .config import TABLES_PATH, TableConfig, load_databases, load_s3, load_tables
+from .config import (
+    TABLES_PATH,
+    TableConfig,
+    load_databases,
+    load_s3,
+    load_tables,
+    load_yaml,
+)
+from .discovery import _write_atomic, file_lock
 
 
-LOG = logging.getLogger("mysql-s3-cdc-sink")
+LOG = logging.getLogger("KafkaS3Archive")
 BINLOG_NUMBER = re.compile(r"(\d+)$")
 OPERATION_NAMES = {"c": "insert", "r": "snapshot", "u": "update", "d": "delete"}
 
 
 def topic_map() -> dict[str, TableConfig]:
-    prefixes = {str(db["name"]): str(db["topic_prefix"]) for db in load_databases()}
-    return {
-        f"{prefixes[table.source]}.{table.database}.{table.table}": table
-        for table in load_tables() if table.enabled
+    sources = {
+        str(db["name"]): (str(db["topic_prefix"]), str(db["database"]))
+        for db in load_databases()
     }
+    mapping = {}
+    for table in load_tables():
+        if not table.enabled:
+            continue
+        source = sources.get(table.source)
+        if source is None:
+            LOG.warning(
+                "Ignoring enabled table %s.%s because its source is unknown "
+                "or disabled",
+                table.source,
+                table.table,
+            )
+            continue
+        prefix, configured_database = source
+        if table.database != configured_database:
+            LOG.warning(
+                "Ignoring enabled table %s.%s because database=%s does not "
+                "match configured database=%s",
+                table.source,
+                table.table,
+                table.database,
+                configured_database,
+            )
+            continue
+        mapping[f"{prefix}.{table.database}.{table.table}"] = table
+    return mapping
 
 
 def sortable_lsn(source: dict[str, Any]) -> str:
@@ -118,15 +151,23 @@ class S3Writer:
                 arguments[target] = credentials[source]
         self.client = boto3.client("s3", **arguments)
 
-    def upload(self, table: TableConfig, topic: str, partition: int, rows: list[dict[str, Any]]) -> int:
+    def upload(
+        self,
+        table: TableConfig,
+        topic: str,
+        partition: int,
+        rows: list[dict[str, Any]],
+    ) -> tuple[str, str]:
         groups: dict[date, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             groups[partition_day(row, table)].append(row)
         prefix = str(self.config.get("prefix", "")).strip("/")
-        start_offset = min(int(row["_cdc_kafka_offset"]) for row in rows)
-        end_offset = max(int(row["_cdc_kafka_offset"]) for row in rows)
-        count = 0
+        latest_row = max(rows, key=lambda row: int(row["_cdc_kafka_offset"]))
+        latest_day = partition_day(latest_row, table)
+        latest_object_key = ""
         for day, day_rows in groups.items():
+            start_offset = min(int(row["_cdc_kafka_offset"]) for row in day_rows)
+            end_offset = max(int(row["_cdc_kafka_offset"]) for row in day_rows)
             directory = "/".join(part for part in (prefix, table.key.strip("/")) if part)
             directory += f"/year={day.year:04d}/month={day.month:02d}/day={day.day:02d}"
             filename = f"part-p{partition:05d}-o{start_offset:020d}-{end_offset:020d}.parquet"
@@ -135,9 +176,47 @@ class S3Writer:
                 path = Path(temporary) / filename
                 pq.write_table(pa.Table.from_pylist(normalized_rows(day_rows)), path, compression="snappy")
                 self.client.upload_file(str(path), self.config["bucket"], object_key)
-            LOG.info("Uploaded %d changes from %s to s3://%s/%s", len(day_rows), topic, self.config["bucket"], object_key)
-            count += 1
-        return count
+            LOG.info(
+                "Uploaded %d CDC rows to s3://%s/%s "
+                "[topic=%s partition=%d offsets=%d-%d]",
+                len(day_rows), self.config["bucket"], object_key,
+                topic, partition, start_offset, end_offset,
+            )
+            if day == latest_day:
+                latest_object_key = object_key
+        return str(latest_row["lsn"]), latest_object_key
+
+
+def store_table_progress(table: TableConfig, last_lsn: str, store_key: str) -> None:
+    """Atomically record the latest successfully uploaded event for a table."""
+    identity = (table.source, table.database, table.table)
+    with file_lock(TABLES_PATH):
+        document = load_yaml(TABLES_PATH, expand_environment=False)
+        entries = document.get("tables")
+        if not isinstance(entries, list):
+            raise ValueError("tables.yml must contain a 'tables' list")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            candidate = (
+                str(entry.get("source")),
+                str(entry.get("database")),
+                str(entry.get("table")),
+            )
+            if candidate != identity:
+                continue
+            current_lsn = entry.get("last_lsn")
+            # LSNs are fixed-width strings, so lexical comparison preserves
+            # MySQL binlog file/position/row ordering and prevents regression.
+            if current_lsn is None or last_lsn >= str(current_lsn):
+                entry["last_lsn"] = last_lsn
+                entry["store_key"] = store_key
+                _write_atomic(TABLES_PATH, document)
+            return
+    raise ValueError(
+        f"Cannot save progress: table {table.source}.{table.database}.{table.table} "
+        "is missing from tables.yml"
+    )
 
 
 def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]]) -> None:
@@ -149,7 +228,8 @@ def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableC
         if record is not None:
             uploads[(message.topic(), message.partition(), table)].append(record)
     for (topic, partition, table), rows in uploads.items():
-        writer.upload(table, topic, partition, rows)
+        last_lsn, store_key = writer.upload(table, topic, partition, rows)
+        store_table_progress(table, last_lsn, store_key)
     commit_offsets = [TopicPartition(topic, partition, offset + 1) for (topic, partition), offset in offsets.items()]
     if commit_offsets:
         consumer.commit(offsets=commit_offsets, asynchronous=False)
@@ -157,7 +237,10 @@ def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableC
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     document = load_s3()
     sink_config = document["sink"]
     writer = S3Writer(document["s3"])
@@ -177,9 +260,11 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     batch_size = int(sink_config.get("batch_size", 1000))
     flush_seconds = float(sink_config.get("flush_seconds", 30))
+    upload_retry_seconds = float(sink_config.get("upload_retry_seconds", 30))
     buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]] = []
     last_flush = time.monotonic()
     last_marker: tuple[int, int] | None = None
+    last_missing_topic_warning = 0.0
     mapping: dict[str, TableConfig] = {}
     try:
         while not stopping:
@@ -197,7 +282,19 @@ def main() -> None:
             message = consumer.poll(1.0)
             if message is not None:
                 if message.error():
-                    if message.error().code() != KafkaError._PARTITION_EOF:
+                    error_code = message.error().code()
+                    if error_code == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                        # Debezium creates a table topic only when its snapshot
+                        # or first change event begins. Keep polling during that
+                        # normal gap instead of terminating the S3 sink.
+                        now = time.monotonic()
+                        if now - last_missing_topic_warning >= 30:
+                            LOG.warning(
+                                "Waiting for Debezium to create an enabled table topic: %s",
+                                message.error(),
+                            )
+                            last_missing_topic_warning = now
+                    elif error_code != KafkaError._PARTITION_EOF:
                         raise RuntimeError(str(message.error()))
                 else:
                     table = mapping.get(message.topic())
@@ -206,9 +303,19 @@ def main() -> None:
                         record = event_record(envelope, message, table) if envelope else None
                         buffered.append((message, table, record))
             if buffered and (len(buffered) >= batch_size or time.monotonic() - last_flush >= flush_seconds):
-                flush(consumer, writer, buffered)
-                buffered.clear()
-                last_flush = time.monotonic()
+                try:
+                    flush(consumer, writer, buffered)
+                except Exception:
+                    # Keep the uncommitted batch in memory so a temporary S3
+                    # outage cannot lose Kafka records or terminate the sink.
+                    LOG.exception(
+                        "S3 flush failed; retaining %d Kafka record(s) and retrying in %.1f seconds",
+                        len(buffered), upload_retry_seconds,
+                    )
+                    time.sleep(upload_retry_seconds)
+                else:
+                    buffered.clear()
+                    last_flush = time.monotonic()
         if buffered:
             flush(consumer, writer, buffered)
     finally:

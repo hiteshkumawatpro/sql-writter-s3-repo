@@ -1,0 +1,211 @@
+MYSQL-S3-FREQ EC2 NETWORK WHITELIST
+===================================
+
+Deployment target: Ubuntu EC2
+Application: mysql-s3-freq
+AWS region: ap-south-1 (Mumbai)
+
+
+1. RUNTIME ACCESS - MANDATORY
+-----------------------------
+
+The following destinations must remain reachable while the exporter runs.
+
+Destination                              Protocol/Port  Purpose
+-----------                              -------------  -------
+172.26.15.16                             TCP 3306       MySQL source server
+s3.ap-south-1.amazonaws.com              TCP 443        Regional S3 API endpoint
+*.s3.ap-south-1.amazonaws.com            TCP 443        S3 bucket virtual-host endpoints
+<internal-DNS-resolver>                  UDP/TCP 53     DNS resolution
+<internal-NTP-server>                    UDP 123        Clock synchronization for AWS signing
+
+If wildcard domains are not permitted, replace the S3 wildcard with:
+
+<S3_BUCKET>.s3.ap-south-1.amazonaws.com:443
+
+The S3 bucket name is supplied through the S3_BUCKET environment variable.
+
+Recommended alternative:
+Create an Amazon S3 Gateway VPC Endpoint in ap-south-1 and associate it with
+the EC2 subnet route table. This permits private S3 access without an Internet
+Gateway or NAT Gateway.
+
+
+2. UBUNTU PACKAGE REPOSITORIES - INSTALLATION/UPDATES ONLY
+----------------------------------------------------------
+
+Allow only the Ubuntu repository hosts configured on the EC2 instance.
+Common Ubuntu/AWS EC2 repository hosts are:
+
+Destination                              Protocol/Port  Purpose
+-----------                              -------------  -------
+archive.ubuntu.com                       TCP 80         Ubuntu archive and updates
+security.ubuntu.com                      TCP 80         Ubuntu security updates
+ap-south-1.ec2.archive.ubuntu.com        TCP 80         AWS regional Ubuntu mirror
+in.archive.ubuntu.com                    TCP 80         India Ubuntu mirror, if configured
+
+If the instance's APT sources use HTTPS, allow TCP 443 for the corresponding
+hosts instead of, or in addition to, TCP 80.
+
+Verify the exact hosts configured on the EC2 instance with:
+
+grep -RhE '^[[:space:]]*(URIs:|deb )' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null
+
+Required Ubuntu packages:
+
+git
+python3
+python3-venv
+python3-pip
+rsync
+
+Expected base-system utilities:
+
+systemd/systemctl
+journalctl
+useradd
+cp
+chmod
+chown
+ca-certificates
+OpenSSH client/server or AWS Systems Manager access
+
+
+3. PYTHON PACKAGE REPOSITORIES - INSTALLATION/UPDATES ONLY
+----------------------------------------------------------
+
+Destination                              Protocol/Port  Purpose
+-----------                              -------------  -------
+pypi.org                                 TCP 443        Python package index and metadata
+files.pythonhosted.org                   TCP 443        Python wheel/package downloads
+
+Direct Python dependencies:
+
+boto3==1.40.1
+mysql-connector-python==9.4.0
+PyYAML==6.0.2
+pyarrow==21.0.0
+
+Transitive Python dependencies used by the direct dependencies:
+
+botocore
+jmespath
+s3transfer
+python-dateutil
+six
+urllib3
+
+Versions observed in the repository's existing environment:
+
+botocore==1.40.76
+jmespath==1.1.0
+s3transfer==0.13.1
+python-dateutil==2.9.0.post0
+six==1.17.0
+urllib3==2.7.0
+
+Note: These transitive packages are not all pinned in requirements.txt. Pip may
+select different compatible versions during a later installation.
+
+
+4. GITHUB - INSTALLATION/UPDATES ONLY
+-------------------------------------
+
+Repository:
+https://github.com/hiteshkumawatpro/sql-writter-s3-repo.git
+
+Minimum destination for a normal clone/update:
+
+Destination                              Protocol/Port  Purpose
+-----------                              -------------  -------
+github.com                               TCP 443        Git clone, fetch and pull
+
+Conditional GitHub destinations:
+
+Destination                              Protocol/Port  When needed
+-----------                              -------------  -----------
+api.github.com                           TCP 443        API/authentication automation
+githubusercontent.com                   TCP 443        GitHub-hosted content
+*.githubusercontent.com                 TCP 443        GitHub-hosted content
+objects.githubusercontent.com            TCP 443        Git object downloads
+media.githubusercontent.com              TCP 443        Git LFS/media downloads
+github-cloud.s3.amazonaws.com            TCP 443        Some Git LFS download flows
+
+The repository contains Git LFS artifacts for the separate mysql-s3-cdc stack.
+Those artifacts are not needed for mysql-s3-freq. To skip them during cloning:
+
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/hiteshkumawatpro/sql-writter-s3-repo.git
+
+If mysql-s3-freq is transferred through SCP or an approved internal artifact
+repository, no GitHub access is required on the EC2 instance.
+
+
+5. COPY-PASTE DOMAIN/DESTINATION LIST
+-------------------------------------
+
+# Runtime - mandatory
+172.26.15.16:3306
+s3.ap-south-1.amazonaws.com:443
+*.s3.ap-south-1.amazonaws.com:443
+
+# Ubuntu packages - installation/update only
+archive.ubuntu.com:80
+security.ubuntu.com:80
+ap-south-1.ec2.archive.ubuntu.com:80
+in.archive.ubuntu.com:80
+
+# Python packages - installation/update only
+pypi.org:443
+files.pythonhosted.org:443
+
+# Repository - installation/update only
+github.com:443
+
+# Conditional GitHub/Git LFS destinations
+api.github.com:443
+githubusercontent.com:443
+*.githubusercontent.com:443
+objects.githubusercontent.com:443
+media.githubusercontent.com:443
+github-cloud.s3.amazonaws.com:443
+
+# Infrastructure
+<internal-DNS-resolver>:53 UDP/TCP
+<internal-NTP-server>:123 UDP
+
+
+6. NOT REQUIRED FOR MYSQL-S3-FREQ
+---------------------------------
+
+The following domains are not required for the Ubuntu mysql-s3-freq exporter:
+
+docker.io
+registry-1.docker.io
+quay.io
+maven.org
+repo1.maven.org
+downloads.apache.org
+api.adoptium.net
+debezium.io
+kafka.apache.org
+npmjs.org
+sts.ap-south-1.amazonaws.com
+kms.ap-south-1.amazonaws.com
+
+Apache Kafka, Debezium, Java and the Windows wheels under mysql-s3-cdc belong
+to a different deployment and are not prerequisites for mysql-s3-freq.
+
+
+7. MINIMUM ACCESS AFTER AN OFFLINE INSTALLATION
+-----------------------------------------------
+
+If the repository, Ubuntu packages and Python wheels are staged through an
+approved internal/offline process, the only application destinations required
+at runtime are:
+
+172.26.15.16:3306
+s3.ap-south-1.amazonaws.com:443
+*.s3.ap-south-1.amazonaws.com:443
+
+DNS and time synchronization must also be available through the organization's
+internal infrastructure.

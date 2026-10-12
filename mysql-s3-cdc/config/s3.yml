@@ -1,5 +1,5 @@
 s3:
-  bucket: your-cdc-bucket
+  bucket: algo8
   prefix: mysql-cdc
   region: ap-south-1
   # endpoint_url: http://minio:9000

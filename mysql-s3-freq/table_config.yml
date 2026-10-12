@@ -554,7 +554,7 @@ tables:
   database: btpmechanicalchecksheetbkp
   table: machineRun
   key: BTP/bronze/maintenance/mechanicalchecksheet/machineRun
-  store_key: startedAt
+  store_key: startedAt 
   offset_column: id
   offset_value: 14334
   last_read: '2026-10-11T21:01:29.156429+00:00'

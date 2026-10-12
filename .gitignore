@@ -9,3 +9,7 @@ __pycache__/
 
 # Runtime lock files
 *.lock
+
+# Local Kafka, Debezium, PID, and pipeline logs/state
+mysql-s3-cdc/runtime/*
+!mysql-s3-cdc/runtime/.gitkeep

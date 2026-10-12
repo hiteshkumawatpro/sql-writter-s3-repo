@@ -1,4 +1,7 @@
-new # MySQL to S3 Parquet
+# MySQL to S3 Parquet
+
+For complete Ubuntu EC2 installation and systemd instructions, see
+[HOSTING_EC2_UBUNTU.md](HOSTING_EC2_UBUNTU.md).
 
 Small service with two scripts and two YAML configuration files.
 

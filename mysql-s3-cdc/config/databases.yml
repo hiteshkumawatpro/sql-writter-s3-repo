@@ -1,17 +1,84 @@
 databases:
-  - name: 
+  - name: btpprocessaudit
     driver: mysql
-    host: 127.0.0.1
+    host: 172.31.10.99
     port: 3306
-    username: debezium
-    password: replace-with-mysql-password
-    database: application_db
+    username: cdc_user
+    password: algo8@123
+    database: btpprocessaudit
     enabled: true
     # Must be unique among MySQL replication clients.
     server_id: 5401
     # Must be unique across every configured source.
-    topic_prefix: cdc_mysql_main
+    topic_prefix: btpprocessaudit
     snapshot_mode: initial
+    # Private-network server resets TLS negotiation; use an unencrypted DB connection.
+    ssl_mode: disabled
+    connection_time_zone: Asia/Calcutta
+
+  - name: authdb
+    driver: mysql
+    host: 172.31.10.99
+    port: 3306
+    username: cdc_user
+    password: algo8@123
+    database: authdb
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5402
+    # Must be unique across every configured source.
+    topic_prefix: authdb
+    snapshot_mode: initial
+    ssl_mode: disabled
+    connection_time_zone: Asia/Calcutta
+
+
+  - name: btpmechanicalchecksheet
+    driver: mysql
+    host: 172.31.10.99
+    port: 3306
+    username: cdc_user
+    password: algo8@123
+    database: btpmechanicalchecksheet
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5403
+    # Must be unique across every configured source.
+    topic_prefix: btpmechanicalchecksheet
+    snapshot_mode: initial
+    ssl_mode: disabled
+    connection_time_zone: Asia/Calcutta
+
+  - name: jkTechnicalChecksheet
+    driver: mysql
+    host: 172.31.10.99
+    port: 3306
+    username: cdc_user
+    password: algo8@123
+    database: jkTechnicalChecksheet
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5404
+    # Must be unique across every configured source.
+    topic_prefix: jkTechnicalChecksheet
+    snapshot_mode: initial
+    ssl_mode: disabled
+    connection_time_zone: Asia/Calcutta
+
+  - name: jkUnsafeObservation
+    driver: mysql
+    host: 172.31.10.99
+    port: 3306
+    username: cdc_user
+    password: algo8@123
+    database: jkUnsafeObservation
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5405
+    # Must be unique across every configured source.
+    topic_prefix: jkUnsafeObservation
+    snapshot_mode: initial
+    ssl_mode: disabled
     connection_time_zone: Asia/Calcutta
 
   # Add more database blocks here. Each can point to another schema or server.
@@ -26,4 +93,5 @@ databases:
   #   server_id: 5402
   #   topic_prefix: cdc_mysql_reporting
   #   snapshot_mode: initial
+  #   ssl_mode: preferred
 
