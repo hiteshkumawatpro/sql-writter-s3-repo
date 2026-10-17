@@ -1,7 +1,7 @@
 """Consume Debezium envelopes, filter operations, and write Parquet to S3."""
 
 from __future__ import annotations
-
+# fix table path
 import json
 import logging
 import os
