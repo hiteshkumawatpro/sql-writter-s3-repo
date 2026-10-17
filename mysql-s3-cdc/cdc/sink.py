@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 from confluent_kafka import Consumer, KafkaError, TopicPartition
 
 from .config import (
+    TABLES_PATH,
     TableConfig,
     load_databases,
     load_s3,
