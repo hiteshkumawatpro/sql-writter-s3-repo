@@ -120,11 +120,25 @@ class SnapshotLifecycleTests(unittest.TestCase):
             "2026-10-18T14:15:22.987654", "datetime"
         )
         self.assertEqual(precise, datetime(2026, 10, 18, 14, 15, 22))
+        numeric_milliseconds = sink.normalize_temporal_value(
+            1792323322987, "datetime"
+        )
+        self.assertEqual(numeric_milliseconds.microsecond, 0)
+        numeric_microseconds = sink.normalize_temporal_value(
+            1792323322987654, "datetime"
+        )
+        self.assertEqual(numeric_microseconds.microsecond, 0)
+        numeric_time = sink.normalize_temporal_value(51322987654, "time")
+        self.assertEqual(numeric_time.isoformat(), "14:15:22")
         timestamp = sink.normalize_temporal_value(
             "2026-10-18T14:15:22.456789Z", "timestamp"
         )
         self.assertEqual(timestamp.tzinfo, timezone.utc)
         self.assertEqual(timestamp.microsecond, 0)
+        numeric_timestamp = sink.normalize_temporal_value(
+            1792323322987654, "timestamp"
+        )
+        self.assertEqual(numeric_timestamp.microsecond, 0)
 
     def test_runtime_snapshot_state_is_durable(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -213,7 +213,13 @@ def normalize_temporal_value(value: Any, data_type: str) -> Any:
         ).replace(microsecond=0)
     # MySQL TIMESTAMP is emitted by Debezium as an ISO UTC ZonedTimestamp.
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value) / 1_000, timezone.utc).replace(
+        magnitude = abs(float(value))
+        divisor = 1_000
+        if magnitude >= 100_000_000_000_000_000:
+            divisor = 1_000_000_000
+        elif magnitude >= 100_000_000_000_000:
+            divisor = 1_000_000
+        return datetime.fromtimestamp(float(value) / divisor, timezone.utc).replace(
             microsecond=0
         )
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00").replace(" ", "T"))
