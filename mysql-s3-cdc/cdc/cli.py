@@ -1,6 +1,7 @@
 """Container-side administrative CLI."""
 
 import argparse
+import sys
 
 from .config import load_databases, load_tables, validate_all
 from .connectors import apply, statuses
@@ -34,7 +35,8 @@ def main() -> None:
             print(f"WARNING: {warning}")
         apply(wait=args.wait)
     elif args.command == "status":
-        statuses()
+        if not statuses():
+            sys.exit(1)
 
 
 if __name__ == "__main__":

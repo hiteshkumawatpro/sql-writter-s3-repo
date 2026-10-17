@@ -10,7 +10,7 @@ import signal
 import tempfile
 import time
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ import pyarrow.parquet as pq
 from confluent_kafka import Consumer, KafkaError, TopicPartition
 
 from .config import (
-    TABLES_PATH,
     TableConfig,
     load_databases,
     load_s3,
@@ -31,6 +30,7 @@ from .discovery import _write_atomic, file_lock
 
 
 LOG = logging.getLogger("KafkaS3Archive")
+PROGRESS_PATH = Path(os.getenv("CDC_PROGRESS_FILE", "runtime/table-progress.yml"))
 BINLOG_NUMBER = re.compile(r"(\d+)$")
 OPERATION_NAMES = {"c": "insert", "r": "snapshot", "u": "update", "d": "delete"}
 
@@ -113,8 +113,21 @@ def partition_day(record: dict[str, Any], table: TableConfig) -> date:
     if isinstance(value, date):
         return value
     if isinstance(value, (int, float)):
-        # Debezium timestamps are milliseconds when represented numerically.
-        return datetime.fromtimestamp(float(value) / 1000, timezone.utc).date()
+        # Debezium schema-less JSON represents DATE as epoch days, DATETIME
+        # as epoch milliseconds or microseconds (depending on precision), and
+        # nanosecond mode as epoch nanoseconds. A configured numeric partition
+        # column is therefore normalized by magnitude.
+        magnitude = abs(float(value))
+        if magnitude < 10_000_000:
+            return date(1970, 1, 1) + timedelta(days=int(value))
+        divisor = 1_000
+        if magnitude >= 100_000_000_000_000_000:
+            divisor = 1_000_000_000
+        elif magnitude >= 100_000_000_000_000:
+            divisor = 1_000_000
+        return datetime.fromtimestamp(
+            float(value) / divisor, timezone.utc
+        ).date()
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
 
 
@@ -188,35 +201,22 @@ class S3Writer:
 
 
 def store_table_progress(table: TableConfig, last_lsn: str, store_key: str) -> None:
-    """Atomically record the latest successfully uploaded event for a table."""
-    identity = (table.source, table.database, table.table)
-    with file_lock(TABLES_PATH):
-        document = load_yaml(TABLES_PATH, expand_environment=False)
-        entries = document.get("tables")
-        if not isinstance(entries, list):
-            raise ValueError("tables.yml must contain a 'tables' list")
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            candidate = (
-                str(entry.get("source")),
-                str(entry.get("database")),
-                str(entry.get("table")),
-            )
-            if candidate != identity:
-                continue
-            current_lsn = entry.get("last_lsn")
-            # LSNs are fixed-width strings, so lexical comparison preserves
-            # MySQL binlog file/position/row ordering and prevents regression.
-            if current_lsn is None or last_lsn >= str(current_lsn):
-                entry["last_lsn"] = last_lsn
-                entry["store_key"] = store_key
-                _write_atomic(TABLES_PATH, document)
-            return
-    raise ValueError(
-        f"Cannot save progress: table {table.source}.{table.database}.{table.table} "
-        "is missing from tables.yml"
-    )
+    """Record upload progress in ignored runtime state, never tracked config."""
+    identity = f"{table.source}.{table.database}.{table.table}"
+    PROGRESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(PROGRESS_PATH):
+        document = load_yaml(PROGRESS_PATH, expand_environment=False) if PROGRESS_PATH.exists() else {}
+        entries = document.setdefault("tables", {})
+        current = entries.get(identity) or {}
+        current_lsn = current.get("last_lsn")
+        # Fixed-width LSNs compare in binlog file/position/row order.
+        if current_lsn is None or last_lsn >= str(current_lsn):
+            entries[identity] = {
+                "last_lsn": last_lsn,
+                "store_key": store_key,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _write_atomic(PROGRESS_PATH, document)
 
 
 def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]]) -> None:

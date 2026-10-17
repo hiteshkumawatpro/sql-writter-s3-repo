@@ -115,7 +115,53 @@ tables:
 - `delete` includes delete events using the `before` image.
 - `partition_column` optionally selects a row date/timestamp; `null` uses event time in UTC.
 
-After changing table enablement, run `python manage.py sync`. Operation switches and sink subscriptions hot-reload, but connector capture membership requires `sync`. Enabling a table after the connector's initial snapshot captures future changes; request a Debezium incremental snapshot if historical rows are also needed.
+After changing table enablement, run `python manage.py sync`. For a table newly
+added to an existing healthy connector, `sync` updates the capture list and
+automatically requests a Debezium blocking snapshot for only the new table.
+That source pauses while existing rows are emitted, then resumes from its binlog
+position; Kafka, the S3 sink, and other sources remain online. Tables without a
+primary key are supported by this snapshot mode.
+
+The connector retains schema history for visible tables before they are
+enabled. This prevents future late-enabled tables from failing with `schema
+isn't known`. It is preventive, not retroactive: a connector whose history was
+created using the old restricted setting needs a guarded schema-history recovery
+before the affected table can be safely onboarded. Never delete connector
+offsets or schema-history topics while the pipeline is running.
+
+For an already-broken connector, first stop changing that source and preserve
+`runtime/kafka-data`. A Debezium `snapshot.mode=recovery` repair is safe only if
+no table schema changed after the connector stopped at its recorded binlog
+position. The repair must be done for that connector alone: stop it, back up its
+config/status/offsets, rebuild its schema-history topic with recovery mode and
+`schema.history.internal.store.only.captured.tables.ddl=false`, verify the task
+is running, then return snapshot mode to `no_data` and run `sync`. If that
+no-schema-change condition cannot be proven, do not automate recovery; use a new
+connector/history topic or a DBA-approved full resnapshot. This guard avoids
+silently decoding retained binlog events with the wrong table schema.
+
+### Backfill a table enabled after the initial snapshot
+
+For a one-time historical load, the manager can stream one enabled table from
+MySQL directly into the same S3 Parquet layout without resetting Kafka or
+Debezium offsets:
+
+```bash
+python manage.py backfill JK_BTP_PPDS BTP_Schedule_Floor_Monthly --yes
+```
+
+The command uses the source credentials from `databases.yml`/`.env`, and the
+S3 key and partition column from `tables.yml`. It reads under a consistent
+MySQL transaction and uploads batches of 5,000 rows by default. Override this
+with `--batch-size`. Object names include the stable run identifier
+`manual-v1`; rerunning with the same `--run-id` overwrites the same object
+names instead of creating a second set of backfill files.
+
+Backfill rows use `_cdc_operation: snapshot`, `_cdc_backfill: true`, and
+`_cdc_backfill_run_id` metadata. A direct backfill does not alter connector or
+consumer offsets. Run `sync` first so subsequent changes are captured through
+normal CDC. Because changes can overlap the consistent backfill snapshot,
+downstream consumers must retain their normal CDC deduplication/version rules.
 
 ## 5. Start and operate
 
@@ -183,17 +229,23 @@ the S3 sink continue starting. Run `python manage.py status` afterward because
 a connector accepted by the REST API can still fail asynchronously.
 The manager waits for applied tasks and retries transient `FAILED` task states
 for a bounded startup period; a persistently unavailable source is logged and
-does not prevent other sources from running. While the stack is running, the
-watchdog checks managed connector tasks every 30 seconds and restarts only tasks
-in `FAILED` state.
+does not prevent other sources from running. The watchdog retries transient
+failures at most three times with backoff. It does not continuously restart
+schema-history, missing-binlog, or disk-full failures. `status` prints task
+failure traces, returns a failing exit code when unhealthy, and reports runtime
+disk space. Startup requires at least 10 GiB and 5% free; override the GiB
+threshold with `CDC_MIN_FREE_GB`.
 
 Only sources having at least one enabled table whose `source` and `database`
 exactly match `databases.yml` receive a Debezium connector. `sync` removes stale
 managed connectors for renamed sources and sources with no matching enabled
-tables, preventing unwanted topics and CDC reads. Debezium schema history is
-also restricted to those captured tables; it does not scan schema metadata for
-every database visible to the MySQL account during startup. After applying a
-configuration, `sync` also restarts any task that was already in `FAILED` state.
+tables, preventing unwanted topics and CDC reads. Change events remain limited
+to enabled tables, while schema history retains DDL for visible tables in the
+configured database so future onboarding is safe.
+
+Successful upload progress is stored in ignored runtime state at
+`runtime/table-progress.yml`; the sink never rewrites tracked `tables.yml`.
+This keeps normal EC2 operation from creating Git changes that block `git pull`.
 
 During an initial snapshot, an enabled table topic might not exist immediately.
 The S3 sink logs that it is waiting and keeps polling until Debezium creates the

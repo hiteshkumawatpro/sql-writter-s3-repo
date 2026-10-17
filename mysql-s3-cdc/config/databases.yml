@@ -1,7 +1,7 @@
 databases:
   - name: btpprocessaudit
     driver: mysql
-    host: 172.31.10.99
+    host: 172.26.15.16
     port: 3306
     username: cdc_user
     password: ${MYSQL_MAIN_PASSWORD}
@@ -18,7 +18,7 @@ databases:
 
   - name: authdb
     driver: mysql
-    host: 172.31.10.99
+    host: 172.26.15.16
     port: 3306
     username: cdc_user
     password: ${MYSQL_MAIN_PASSWORD}
@@ -35,7 +35,7 @@ databases:
 
   - name: btpmechanicalchecksheet
     driver: mysql
-    host: 172.31.10.99
+    host: 172.26.15.16
     port: 3306
     username: cdc_user
     password: ${MYSQL_MAIN_PASSWORD}
@@ -51,7 +51,7 @@ databases:
 
   - name: jkTechnicalChecksheet
     driver: mysql
-    host: 172.31.10.99
+    host: 172.26.15.16
     port: 3306
     username: cdc_user
     password: ${MYSQL_MAIN_PASSWORD}
@@ -67,7 +67,7 @@ databases:
 
   - name: jkUnsafeObservation
     driver: mysql
-    host: 172.31.10.99
+    host: 172.26.15.16
     port: 3306
     username: cdc_user
     password: ${MYSQL_MAIN_PASSWORD}
@@ -77,6 +77,25 @@ databases:
     server_id: 5405
     # Must be unique across every configured source.
     topic_prefix: jkUnsafeObservation
+    snapshot_mode: initial
+    ssl_mode: disabled
+    connection_time_zone: Asia/Calcutta
+
+
+
+
+  - name: JK_BTP_PPDS
+    driver: mysql
+    host: 172.26.15.16
+    port: 3306
+    username: cdc_user
+    password: ${MYSQL_MAIN_PASSWORD}
+    database: JK_BTP_PPDS
+    enabled: true
+    # Must be unique among MySQL replication clients.
+    server_id: 5406
+    # Must be unique across every configured source.
+    topic_prefix: JK_BTP_PPDS
     snapshot_mode: initial
     ssl_mode: disabled
     connection_time_zone: Asia/Calcutta

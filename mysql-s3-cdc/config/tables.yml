@@ -35,12 +35,12 @@ tables:
   table: auditLogs
   key: ProcessAudit/btpprocessaudit/auditLogs
   partition_column: runStartedAt
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/ProcessAudit/btpprocessaudit/auditLogs/year=2026/month=10/day=13/part-p00000-o00000000000000004474-00000000000000004478.parquet
 - order: 5
   source: btpprocessaudit
   database: btpprocessaudit
@@ -117,12 +117,12 @@ tables:
   table: machineRun
   key: ProcessAudit/btpprocessaudit/machineRun
   partition_column: startedAt
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/ProcessAudit/btpprocessaudit/machineRun/year=2026/month=10/day=13/part-p00000-o00000000000000005252-00000000000000005264.parquet
 - order: 13
   source: btpprocessaudit
   database: btpprocessaudit
@@ -239,12 +239,12 @@ tables:
   table: violations
   key: ProcessAudit/btpprocessaudit/violations
   partition_column: timestamp
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/ProcessAudit/btpprocessaudit/violations/year=2026/month=10/day=13/part-p00000-o00000000000000006052-00000000000000006054.parquet
 - order: 25
   source: btpprocessaudit
   database: btpprocessaudit
@@ -571,12 +571,12 @@ tables:
   table: auditLogs
   key: jkTechnicalChecksheet/jkTechnicalChecksheet/auditLogs
   partition_column: runStartedAt
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/jkTechnicalChecksheet/jkTechnicalChecksheet/auditLogs/year=2026/month=10/day=13/part-p00000-o00000000000000002662-00000000000000002674.parquet
 - order: 58
   source: jkTechnicalChecksheet
   database: jkTechnicalChecksheet
@@ -653,12 +653,12 @@ tables:
   table: machineRun
   key: jkTechnicalChecksheet/jkTechnicalChecksheet/machineRun
   partition_column: startedAt
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/jkTechnicalChecksheet/jkTechnicalChecksheet/machineRun/year=2026/month=10/day=13/part-p00000-o00000000000000003361-00000000000000003371.parquet
 - order: 66
   source: jkTechnicalChecksheet
   database: jkTechnicalChecksheet
@@ -795,12 +795,12 @@ tables:
   table: violations
   key: jkTechnicalChecksheet/jkTechnicalChecksheet/violations
   partition_column: timestamp
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/jkTechnicalChecksheet/jkTechnicalChecksheet/violations/year=2026/month=10/day=13/part-p00000-o00000000000000001136-00000000000000001139.parquet
 - order: 80
   source: jkTechnicalChecksheet
   database: jkTechnicalChecksheet
@@ -957,12 +957,12 @@ tables:
   table: Violations
   key: jkUnsafeObservation/jkUnsafeObservation/Violations
   partition_column: timestamp
-  enabled: true
+  enabled: false
   insert: true
   update: true
   delete: true
-  last_lsn: null
-  store_key: null
+  last_lsn: 00000000000000000005:00000000000240684826:0000000000
+  store_key: mysql-cdc/jkUnsafeObservation/jkUnsafeObservation/Violations/year=2026/month=10/day=06/part-p00000-o00000000000000000026-00000000000000000026.parquet
 - order: 96
   source: jkUnsafeObservation
   database: jkUnsafeObservation
@@ -980,6 +980,813 @@ tables:
   key: jkUnsafeObservation/jkUnsafeObservation/violationActionHistory
   partition_column: null
   enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 98
+  source: btpprocessaudit
+  database: btpprocessaudit
+  table: auditSpecificationConfigs
+  key: btpprocessaudit/btpprocessaudit/auditSpecificationConfigs
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 99
+  source: authdb
+  database: authdb
+  table: masterUnitsOfMeasurement
+  key: authdb/authdb/masterUnitsOfMeasurement
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 100
+  source: jkTechnicalChecksheet
+  database: jkTechnicalChecksheet
+  table: auditLogParameterSummary_backup_2494_20260930
+  key: jkTechnicalChecksheet/jkTechnicalChecksheet/auditLogParameterSummary_backup_2494_20260930
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 101
+  source: jkTechnicalChecksheet
+  database: jkTechnicalChecksheet
+  table: auditLogs_backup_2494_20260930
+  key: jkTechnicalChecksheet/jkTechnicalChecksheet/auditLogs_backup_2494_20260930
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 102
+  source: jkTechnicalChecksheet
+  database: jkTechnicalChecksheet
+  table: machineMappingBackup_20260930
+  key: jkTechnicalChecksheet/jkTechnicalChecksheet/machineMappingBackup_20260930
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 103
+  source: jkTechnicalChecksheet
+  database: jkTechnicalChecksheet
+  table: machineRun_backup_2494_20260930
+  key: jkTechnicalChecksheet/jkTechnicalChecksheet/machineRun_backup_2494_20260930
+  partition_column: null
+  enabled: false
+  insert: true
+  update: true
+  delete: true
+- order: 104
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BOM_BELT_MASTER
+  key: BTP/bronze/businessOps/PPDS/BOM_BELT_MASTER
+  partition_column: updatedAT
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 105
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Carcass_Inventory
+  key: BTP/bronze/businessOps/PPDS/BTP_Carcass_Inventory
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 106
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Carcass_Inventory_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Carcass_Inventory_History
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 107
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Curing_Production
+  key: BTP/bronze/businessOps/PPDS/BTP_Curing_Production
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 108
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_GT_Inventory
+  key: BTP/bronze/businessOps/PPDS/BTP_GT_Inventory
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 109
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_GT_Inventory_History
+  key: BTP/bronze/businessOps/PPDS/BTP_GT_Inventory_History
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 110
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Live_Inventory
+  key: BTP/bronze/businessOps/PPDS/BTP_Live_Inventory
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 111
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Live_Inventory_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Live_Inventory_History
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 112
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Live_Inventory_Raw
+  key: BTP/bronze/businessOps/PPDS/BTP_Live_Inventory_Raw
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 113
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Live_Inventory_Raw_history
+  key: BTP/bronze/businessOps/PPDS/BTP_Live_Inventory_Raw_history
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 114
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_MES_PLCBOM
+  key: BTP/bronze/businessOps/PPDS/BTP_MES_PLCBOM
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 115
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Machine_Last_Run
+  key: BTP/bronze/businessOps/PPDS/BTP_Machine_Last_Run
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 116
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Machine_Master
+  key: BTP/bronze/businessOps/PPDS/BTP_Machine_Master
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 117
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_Aging
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_Aging
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 118
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_BOM
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_BOM
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 119
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_BOM_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_BOM_History
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 120
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_BuildingAllowable
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_BuildingAllowable
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 121
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_BusinessRules
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_BusinessRules
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 122
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_ChangeoverMatrix
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_ChangeoverMatrix
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 123
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_CuringAllowable
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_CuringAllowable
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 124
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_CuringCycleTime
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_CuringCycleTime
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 125
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_Cutters
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_Cutters
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 126
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_FRC
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_FRC
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 127
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_IL
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_IL
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 128
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_MPQ
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_MPQ
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 129
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_Routing
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_Routing
+  partition_column: updatedAT
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 130
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_Routing_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_Routing_History
+  partition_column: updatedAT
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 131
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_SKUDesc
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_SKUDesc
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 132
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_Slitters
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_Slitters
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 133
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_extruder
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_extruder
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 134
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_extruder_new
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_extruder_new
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 135
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Master_mixing
+  key: BTP/bronze/businessOps/PPDS/BTP_Master_mixing
+  partition_column: valid_from
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 136
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Mixing_Manual
+  key: BTP/bronze/businessOps/PPDS/BTP_Mixing_Manual
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 137
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_PM_MTC
+  key: BTP/bronze/businessOps/PPDS/BTP_PM_MTC
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 138
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Plan_CTB
+  key: BTP/bronze/businessOps/PPDS/BTP_Plan_CTB
+  partition_column: created_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 139
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Routing_Update_Log
+  key: BTP/bronze/businessOps/PPDS/BTP_Routing_Update_Log
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 140
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Running_Moulds
+  key: BTP/bronze/businessOps/PPDS/BTP_Running_Moulds
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 141
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Running_MouldsHistory
+  key: BTP/bronze/businessOps/PPDS/BTP_Running_MouldsHistory
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 142
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_BuildingPlan
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_BuildingPlan
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 143
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_BuildingPlan_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_BuildingPlan_History
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 144
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_BuildingPlan_Init
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_BuildingPlan_Init
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 145
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_CuringPlan
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_CuringPlan
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 146
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_CuringPlan_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_CuringPlan_History
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 147
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_Floor
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_Floor
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 148
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: BTP_Schedule_Floor_History
+  key: BTP/bronze/businessOps/PPDS/BTP_Schedule_Floor_History
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 149
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: JK_BTP_FRC_PRECUREMENT
+  key: BTP/bronze/businessOps/PPDS/JK_BTP_FRC_PRECUREMENT
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 150
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: Master_Mapping_Mould_SKU
+  key: BTP/bronze/businessOps/PPDS/Master_Mapping_Mould_SKU
+  partition_column: null
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 151
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: SMART_BOM_RAW
+  key: BTP/bronze/businessOps/PPDS/SMART_BOM_RAW
+  partition_column: ModifiedDate
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 152
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_demand
+  key: BTP/bronze/businessOps/PPDS/jkt_demand
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 153
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_demand_history
+  key: BTP/bronze/businessOps/PPDS/jkt_demand_history
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 154
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_demand_tracker
+  key: BTP/bronze/businessOps/PPDS/jkt_demand_tracker
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 155
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_holiday_calendar
+  key: BTP/bronze/businessOps/PPDS/jkt_holiday_calendar
+  partition_column: updated_at
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 156
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan
+  key: BTP/bronze/businessOps/PPDS/jkt_plan
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 157
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_Infeasibility
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_Infeasibility
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 158
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_building
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_building
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 159
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_building_history
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_building_history
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 160
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_capacityUtilisation
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_capacityUtilisation
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 161
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_curing
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_curing
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 162
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_curing_history
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_curing_history
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 163
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_history
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_history
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 164
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_in_schedule
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_in_schedule
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 165
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_in_schedule_sim
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_in_schedule_sim
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 166
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_kpis
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_kpis
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 167
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_moulds
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_moulds
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 168
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_params
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_params
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 169
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_presets
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_presets
+  partition_column: updatedAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 170
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_plan_status_logs
+  key: BTP/bronze/businessOps/PPDS/jkt_plan_status_logs
+  partition_column: createdAt
+  enabled: true
+  insert: true
+  update: true
+  delete: true
+
+- order: 171
+  source: JK_BTP_PPDS
+  database: JK_BTP_PPDS
+  table: jkt_upstream_schedule
+  key: BTP/bronze/businessOps/PPDS/jkt_upstream_schedule
+  partition_column: planned_start
+  enabled: true
   insert: true
   update: true
   delete: true
