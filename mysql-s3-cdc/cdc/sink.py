@@ -3,6 +3,7 @@
 from __future__ import annotations
 # fix table path
 import json
+import hashlib
 import logging
 import os
 import re
@@ -10,6 +11,7 @@ import signal
 import tempfile
 import time
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ from .config import (
     load_yaml,
 )
 from .discovery import _write_atomic, file_lock
+from .runtime_state import STATE_PATH, active_replacements, record_snapshot_rows
 
 
 LOG = logging.getLogger("KafkaS3Archive")
@@ -36,11 +39,16 @@ BINLOG_NUMBER = re.compile(r"(\d+)$")
 OPERATION_NAMES = {"c": "insert", "r": "snapshot", "u": "update", "d": "delete"}
 
 
+class SchemaEvolutionError(RuntimeError):
+    """A record batch cannot be represented by one Parquet schema."""
+
+
 def topic_map() -> dict[str, TableConfig]:
     sources = {
         str(db["name"]): (str(db["topic_prefix"]), str(db["database"]))
         for db in load_databases()
     }
+    replacements = active_replacements()
     mapping = {}
     for table in load_tables():
         if not table.enabled:
@@ -66,6 +74,17 @@ def topic_map() -> dict[str, TableConfig]:
             )
             continue
         mapping[f"{prefix}.{table.database}.{table.table}"] = table
+        for replacement in replacements:
+            if replacement.get("source") == table.source:
+                routed_table = table
+                if replacement.get("state") != "cutover":
+                    routed_table = replace(
+                        table,
+                        key=f"replacements/{replacement['connector']}/{table.key}",
+                    )
+                mapping[
+                    f"{replacement['topic_prefix']}.{table.database}.{table.table}"
+                ] = routed_table
     return mapping
 
 
@@ -100,6 +119,9 @@ def event_record(envelope: dict[str, Any], message, table: TableConfig) -> dict[
         "_cdc_kafka_topic": message.topic(),
         "_cdc_kafka_partition": message.partition(),
         "_cdc_kafka_offset": message.offset(),
+        "_cdc_event_id": hashlib.sha256(
+            f"{message.topic()}:{message.partition()}:{message.offset()}".encode()
+        ).hexdigest(),
     })
     return record
 
@@ -188,7 +210,13 @@ class S3Writer:
             object_key = f"{directory}/{filename}"
             with tempfile.TemporaryDirectory(prefix="mysql-cdc-") as temporary:
                 path = Path(temporary) / filename
-                pq.write_table(pa.Table.from_pylist(normalized_rows(day_rows)), path, compression="snappy")
+                try:
+                    arrow_table = pa.Table.from_pylist(normalized_rows(day_rows))
+                    pq.write_table(arrow_table, path, compression="snappy")
+                except (pa.ArrowException, TypeError, ValueError, OverflowError) as exc:
+                    raise SchemaEvolutionError(
+                        f"Cannot create Parquet for {table.source}.{table.table}: {exc}"
+                    ) from exc
                 self.client.upload_file(str(path), self.config["bucket"], object_key)
             LOG.info(
                 "Uploaded %d CDC rows to s3://%s/%s "
@@ -220,6 +248,30 @@ def store_table_progress(table: TableConfig, last_lsn: str, store_key: str) -> N
             _write_atomic(PROGRESS_PATH, document)
 
 
+def quarantine_schema_batch(
+    table: TableConfig, topic: str, partition: int,
+    rows: list[dict[str, Any]], error: Exception,
+) -> None:
+    """Durably isolate a malformed schema batch so other topics keep flowing."""
+    directory = Path(os.getenv("CDC_QUARANTINE_DIR", "runtime/quarantine"))
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{table.source}-{table.table}.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps({
+                "quarantined_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(error), "topic": topic, "partition": partition,
+                "record": row,
+            }, default=str, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    LOG.error(
+        "Quarantined %d rows for schema evolution error in %s.%s at %s; "
+        "other topic partitions will continue",
+        len(rows), table.source, table.table, path,
+    )
+
+
 def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]]) -> None:
     uploads: dict[tuple[str, int, TableConfig], list[dict[str, Any]]] = defaultdict(list)
     offsets: dict[tuple[str, int], int] = {}
@@ -229,8 +281,15 @@ def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableC
         if record is not None:
             uploads[(message.topic(), message.partition(), table)].append(record)
     for (topic, partition, table), rows in uploads.items():
-        last_lsn, store_key = writer.upload(table, topic, partition, rows)
+        try:
+            last_lsn, store_key = writer.upload(table, topic, partition, rows)
+        except SchemaEvolutionError as exc:
+            quarantine_schema_batch(table, topic, partition, rows, exc)
+            continue
         store_table_progress(table, last_lsn, store_key)
+        snapshot_rows = sum(row.get("_cdc_operation") == "snapshot" for row in rows)
+        streaming = any(row.get("_cdc_operation") != "snapshot" for row in rows)
+        record_snapshot_rows(table.source, table.table, snapshot_rows, streaming)
     commit_offsets = [TopicPartition(topic, partition, offset + 1) for (topic, partition), offset in offsets.items()]
     if commit_offsets:
         consumer.commit(offsets=commit_offsets, asynchronous=False)
@@ -264,14 +323,18 @@ def main() -> None:
     upload_retry_seconds = float(sink_config.get("upload_retry_seconds", 30))
     buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]] = []
     last_flush = time.monotonic()
-    last_marker: tuple[int, int] | None = None
+    last_marker: tuple[int, ...] | None = None
     last_missing_topic_warning = 0.0
     mapping: dict[str, TableConfig] = {}
     try:
         while not stopping:
             if not buffered:
                 stat = TABLES_PATH.stat()
-                marker = (stat.st_mtime_ns, stat.st_size)
+                control_marker = (0, 0)
+                if STATE_PATH.exists():
+                    control = STATE_PATH.stat()
+                    control_marker = (control.st_mtime_ns, control.st_size)
+                marker = (stat.st_mtime_ns, stat.st_size, *control_marker)
                 if marker != last_marker:
                     mapping = topic_map()
                     if mapping:

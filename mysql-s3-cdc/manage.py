@@ -399,14 +399,17 @@ def ensure_runtime_capacity() -> None:
         )
 
 
-def status() -> None:
+def status(source: str | None = None) -> None:
     healthy = True
     for name in ("kafka", "connect", "watchdog", "sink"):
         running = is_running(name)
         print(f"{name}: {'RUNNING' if running else 'STOPPED'}")
         healthy = healthy and running
     if is_running("connect"):
-        result = python_command("-m", "cdc.cli", "status", check=False)
+        command = ["-m", "cdc.cli", "status"]
+        if source:
+            command.extend(("--source", source))
+        result = python_command(*command, check=False)
         healthy = healthy and result.returncode == 0
     total_gib, free_gib, free_percent = runtime_capacity()
     print(
@@ -485,6 +488,10 @@ def main() -> None:
     subparsers.add_parser("start", help="Start Kafka, Connect/Debezium, and the S3 sink.")
     subparsers.add_parser("stop", help="Stop all native services without deleting offsets/data.")
     subparsers.add_parser("restart", help="Stop and start all native services.")
+    subparsers.add_parser(
+        "restart-workers",
+        help="Restart only watchdog and S3 sink; Kafka and Connect remain online.",
+    )
     fresh_parser = subparsers.add_parser(
         "fresh-start",
         help="Delete all local Kafka state/logs and leave services stopped.",
@@ -494,7 +501,8 @@ def main() -> None:
         action="store_true",
         help="Confirm permanent deletion of local Kafka data, offsets, and logs.",
     )
-    subparsers.add_parser("status", help="Show native process and connector state.")
+    status_parser = subparsers.add_parser("status", help="Show native process and connector state.")
+    status_parser.add_argument("--source", help="Limit connector inspection to one configured source.")
     progress_parser = subparsers.add_parser(
         "progress",
         help="Show recent S3 uploads and optionally follow them live.",
@@ -529,7 +537,38 @@ def main() -> None:
         action="store_true",
         help="Confirm the direct S3 backfill.",
     )
-    subparsers.add_parser("sync", help="Validate and apply Debezium connectors.")
+    sync_parser = subparsers.add_parser("sync", help="Validate and apply Debezium connectors.")
+    sync_parser.add_argument("--source", help="Reconcile only this source; unrelated connectors are untouched.")
+    plan_parser = subparsers.add_parser("recovery-plan", help="Read-only connector diagnosis and rollback capture.")
+    plan_parser.add_argument("--source", required=True)
+    recover_parser = subparsers.add_parser("recover", help="Begin guarded history recovery or controlled replacement.")
+    recover_parser.add_argument("--source", required=True)
+    recover_parser.add_argument("--strategy", choices=("history", "replacement"), required=True)
+    recover_parser.add_argument("--ddl-compatible", action="store_true")
+    recover_parser.add_argument("--server-id", type=int)
+    recover_parser.add_argument("--suffix")
+    recover_parser.add_argument("--yes", action="store_true")
+    finalize_parser = subparsers.add_parser("recovery-finalize", help="Finalize a healthy history recovery as no_data.")
+    finalize_parser.add_argument("--source", required=True)
+    finalize_parser.add_argument("--recovery-complete", action="store_true")
+    finalize_parser.add_argument("--yes", action="store_true")
+    snapshot_parser = subparsers.add_parser("snapshot", help="Snapshot an enabled table even when already included.")
+    snapshot_parser.add_argument("--source", required=True)
+    snapshot_parser.add_argument("--table", required=True)
+    snapshot_parser.add_argument("--yes", action="store_true")
+    verify_parser = subparsers.add_parser("verify-table", help="Compare observed snapshot rows and live source state.")
+    verify_parser.add_argument("--source", required=True)
+    verify_parser.add_argument("--table", required=True)
+    cutover_parser = subparsers.add_parser("replacement-cutover", help="Stop original and route a verified replacement to normal S3 keys.")
+    cutover_parser.add_argument("--source", required=True)
+    cutover_parser.add_argument("--verified", action="store_true")
+    cutover_parser.add_argument("--yes", action="store_true")
+    rollback_parser = subparsers.add_parser("replacement-rollback", help="Stop replacement and resume preserved original connector.")
+    rollback_parser.add_argument("--source", required=True)
+    rollback_parser.add_argument("--yes", action="store_true")
+    reconcile_parser = subparsers.add_parser("reconcile", help="Scan S3 and build a duplicate-event manifest without deleting objects.")
+    reconcile_parser.add_argument("--source", required=True)
+    reconcile_parser.add_argument("--table", required=True)
     subparsers.add_parser("validate", help="Validate all YAML configuration.")
     subparsers.add_parser("verify-bundle", help="Check required offline files and Kafka checksum.")
     args = parser.parse_args()
@@ -546,6 +585,15 @@ def main() -> None:
             for service in ("sink", "watchdog", "connect", "kafka"):
                 stop_process(service)
             start()
+        elif args.command == "restart-workers":
+            for service in ("sink", "watchdog"):
+                stop_process(service)
+            launch("watchdog", [str(venv_python()), "-m", "cdc.watchdog"])
+            launch("sink", [str(venv_python()), "-m", "cdc.sink"])
+            manager_message(
+                "Restarted watchdog and sink without restarting Kafka, Connect, "
+                "or any source connector."
+            )
         elif args.command == "fresh-start":
             if not args.yes:
                 raise ValueError(
@@ -554,7 +602,7 @@ def main() -> None:
                 )
             fresh_start()
         elif args.command == "status":
-            status()
+            status(source=args.source)
         elif args.command == "progress":
             if args.lines <= 0:
                 raise ValueError("progress --lines must be positive")
@@ -576,7 +624,58 @@ def main() -> None:
             )
         elif args.command == "sync":
             python_command("-m", "cdc.cli", "validate")
-            python_command("-m", "cdc.cli", "apply", "--wait")
+            command = ["-m", "cdc.cli", "apply", "--wait"]
+            if args.source:
+                command.extend(("--source", args.source))
+            python_command(*command)
+        elif args.command == "recovery-plan":
+            python_command("-m", "cdc.cli", "recovery-plan", "--source", args.source)
+        elif args.command == "recover":
+            command = [
+                "-m", "cdc.cli", "recover", "--source", args.source,
+                "--strategy", args.strategy,
+            ]
+            if args.ddl_compatible:
+                command.append("--ddl-compatible")
+            if args.server_id is not None:
+                command.extend(("--server-id", str(args.server_id)))
+            if args.suffix:
+                command.extend(("--suffix", args.suffix))
+            if args.yes:
+                command.append("--yes")
+            python_command(*command)
+        elif args.command == "recovery-finalize":
+            command = ["-m", "cdc.cli", "recovery-finalize", "--source", args.source]
+            if args.recovery_complete:
+                command.append("--recovery-complete")
+            if args.yes:
+                command.append("--yes")
+            python_command(*command)
+        elif args.command == "snapshot":
+            command = [
+                "-m", "cdc.cli", "snapshot", "--source", args.source,
+                "--table", args.table,
+            ]
+            if args.yes:
+                command.append("--yes")
+            python_command(*command)
+        elif args.command == "verify-table":
+            python_command(
+                "-m", "cdc.cli", "verify-table", "--source", args.source,
+                "--table", args.table,
+            )
+        elif args.command in {"replacement-cutover", "replacement-rollback"}:
+            command = ["-m", "cdc.cli", args.command, "--source", args.source]
+            if args.command == "replacement-cutover" and args.verified:
+                command.append("--verified")
+            if args.yes:
+                command.append("--yes")
+            python_command(*command)
+        elif args.command == "reconcile":
+            python_command(
+                "-m", "cdc.reconcile", "--source", args.source,
+                "--table", args.table,
+            )
         elif args.command == "validate":
             python_command("-m", "cdc.cli", "validate")
         elif args.command == "verify-bundle":

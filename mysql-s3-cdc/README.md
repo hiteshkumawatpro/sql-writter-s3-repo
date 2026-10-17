@@ -174,6 +174,7 @@ python manage.py progress --lines 20
 python manage.py progress --follow
 python manage.py sync
 python manage.py restart
+python manage.py restart-workers
 python manage.py stop
 ```
 
@@ -222,6 +223,104 @@ the service sends stdout/stderr to the journal.
 
 PIDs are tracked in `runtime/pids/`. `stop` preserves Kafka records, connector
 offsets, and schema history under `runtime/kafka-data/`.
+
+After deploying only Python control/sink changes, use `restart-workers` to load
+them without restarting Kafka, Kafka Connect, or any Debezium source connector.
+
+## Source-scoped recovery and replacement
+
+Use source-scoped commands during production recovery. They never reconcile,
+restart, create, update, or remove an unrelated connector:
+
+```bash
+python manage.py status --source JK_BTP_PPDS
+python manage.py sync --source JK_BTP_PPDS
+python manage.py recovery-plan --source JK_BTP_PPDS
+```
+
+`recovery-plan` is read-only with respect to Kafka Connect, Kafka topics,
+offsets and S3. It captures the current connector config, status and offsets in
+`runtime/recovery/<source>/backup-*.json` with owner-only permissions where the
+operating system supports them. These backups contain the resolved database
+password and must be protected with the rest of `runtime/`.
+
+### Guarded history recovery
+
+History recovery is permitted only after a DBA establishes that today's table
+schemas are compatible with every unprocessed event after the connector's
+stored binlog offset. The flag is an assertion, not an automatic compatibility
+test:
+
+```bash
+python manage.py recover --source JK_BTP_PPDS --strategy history --ddl-compatible --yes
+python manage.py status --source JK_BTP_PPDS
+# Inspect runtime/logs/connect.log and confirm recovery completed.
+python manage.py recovery-finalize --source JK_BTP_PPDS --recovery-complete --yes
+python manage.py snapshot --source JK_BTP_PPDS --table BTP_Schedule_Floor_Monthly --yes
+python manage.py progress --follow
+python manage.py verify-table --source JK_BTP_PPDS --table BTP_Schedule_Floor_Monthly
+```
+
+Recovery uses a new schema-history topic and preserves the old history topic,
+connector offsets and Kafka data. `recovery-finalize` refuses to proceed unless
+the task is running and then changes snapshot mode to `no_data`. The selected
+recovery history topic is retained in ignored control state so later `start` or
+`sync` operations do not revert it. The explicit `snapshot` command works even
+when the table is already present in `table.include.list`.
+
+If DDL compatibility cannot be established, do not pass `--ddl-compatible`.
+Create an isolated replacement instead:
+
+```bash
+python manage.py recover --source JK_BTP_PPDS --strategy replacement \
+  --server-id 6406 --suffix recovery1 --yes
+python manage.py status --source JK_BTP_PPDS
+```
+
+The replacement has a separate connector identity, server ID, topic prefix,
+offsets and history topic. Its S3 output is initially isolated under
+`replacements/<connector>/...`. After validating its snapshot and live events:
+
+```bash
+python manage.py replacement-cutover --source JK_BTP_PPDS --verified --yes
+```
+
+Cutover stops but does not delete the original connector and routes subsequent
+replacement events to normal table keys. Rollback preserves all state:
+
+```bash
+python manage.py replacement-rollback --source JK_BTP_PPDS --yes
+```
+
+Because a keyless table has no stable database row identity, no system can
+automatically prove that two snapshots contain the same logical row. Keep the
+isolated replacement snapshot until it has been reconciled and approved.
+
+### Snapshot lifecycle, schema quarantine and duplicate reports
+
+Snapshot requests and observed S3 rows are stored in
+`runtime/control-state.json`. Lifecycle states are `requested`, `snapshotting`,
+`streaming`, and `complete`. `verify-table` compares observed snapshot rows to a
+current source count and requires a running task; concurrent source changes can
+make the counts differ, in which case it safely remains incomplete.
+
+Every new event contains `_cdc_event_id`, a stable hash of its Kafka
+topic/partition/offset. To build an S3 manifest and report duplicates without
+deleting or rewriting any object:
+
+```bash
+python manage.py reconcile --source JK_BTP_PPDS --table BTP_Schedule_Floor_Monthly
+```
+
+Reports and the SQLite event manifest are stored under
+`runtime/reconciliation/`. Files produced before `_cdc_event_id` are reported
+as legacy rows and require business-key or source-LSN reconciliation.
+
+Rows that cannot share a valid Arrow/Parquet schema are isolated under
+`runtime/quarantine/` with the original record and error. Their Kafka offsets
+are committed only after the quarantine file is flushed to disk, allowing other
+topic partitions to continue. Operators must correct and replay quarantined
+records; quarantine is not a replacement for S3 archival.
 
 Connector application is isolated per database. A MySQL source that times out
 or fails Debezium validation is logged and skipped while other connectors and

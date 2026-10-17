@@ -12,6 +12,7 @@ from typing import Any
 from confluent_kafka import Producer
 
 from .config import load_databases, load_tables
+from .runtime_state import active_replacements, load_state, update_snapshot, utc_now
 
 
 CONNECT_URL = os.getenv("CDC_CONNECT_URL", "http://127.0.0.1:8083").rstrip("/")
@@ -192,6 +193,21 @@ def included_tables(config: dict[str, Any] | None) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
+def primary_runtime_config(db: dict[str, Any], config: dict[str, str]) -> dict[str, str]:
+    """Keep a completed recovery history topic stable across later sync/start."""
+    recovery = load_state()["recoveries"].get(str(db["name"]))
+    if recovery and recovery.get("strategy") == "history" and recovery.get("state") in {
+        "recovering", "recovered",
+    }:
+        config["schema.history.internal.kafka.topic"] = str(
+            recovery["recovery_history_topic"]
+        )
+        config["snapshot.mode"] = (
+            "recovery" if recovery["state"] == "recovering" else "no_data"
+        )
+    return config
+
+
 def request_blocking_snapshot(db: dict[str, Any], tables: set[str]) -> None:
     """Ask Debezium to snapshot only newly enabled tables, then resume streaming."""
     if not tables:
@@ -222,6 +238,11 @@ def request_blocking_snapshot(db: dict[str, Any], tables: set[str]) -> None:
             "Kafka did not accept the Debezium snapshot signal: "
             + ("; ".join(delivery_errors) or f"{remaining} message(s) pending")
         )
+    for full_name in tables:
+        update_snapshot(
+            str(db["name"]), full_name.rsplit(".", 1)[-1], state="requested",
+            requested_at=utc_now(), snapshot_rows=0,
+        )
     print(
         "Requested a blocking snapshot for newly enabled table(s) on "
         f"{db['name']}: {', '.join(sorted(tables))}. Existing connectors and "
@@ -229,21 +250,38 @@ def request_blocking_snapshot(db: dict[str, Any], tables: set[str]) -> None:
     )
 
 
-def apply(wait: bool = False, snapshot_new: bool = True) -> None:
+def apply(wait: bool = False, snapshot_new: bool = True, source: str | None = None) -> None:
     if wait:
         wait_until_ready()
     tables = load_tables()
     databases = load_databases()
-    selected = [db for db in databases if eligible_tables(db, tables)]
+    if source is not None:
+        if not any(str(db["name"]) == source for db in databases):
+            raise ValueError(f"Unknown or disabled source: {source}")
+        databases = [db for db in databases if str(db["name"]) == source]
+    replacements = active_replacements()
+    cutover_sources = {
+        str(item["source"]) for item in replacements if item.get("state") == "cutover"
+    }
+    protected_primary_names = {connector_name(item) for item in cutover_sources}
+    selected = [
+        db for db in databases
+        if eligible_tables(db, tables) and str(db["name"]) not in cutover_sources
+    ]
     desired_names = {connector_name(str(db["name"])) for db in selected}
+    desired_names |= protected_primary_names
 
     # Reconcile previously-created connectors. This removes renamed sources and
     # sources that no longer have any enabled, correctly matched tables.
     registered = request("GET", "/connectors") or []
     registered_set = {str(name) for name in registered}
+    # Only primary connector identities in the selected scope are eligible for
+    # removal. Recovery/replacement connectors and unrelated sources are never
+    # touched by a source-scoped sync.
+    scoped_primary_names = {connector_name(str(db["name"])) for db in databases}
     stale_names = sorted(
         str(name) for name in registered
-        if str(name).startswith(MANAGED_PREFIX) and str(name) not in desired_names
+        if str(name) in scoped_primary_names and str(name) not in desired_names
     )
     removed = 0
     for name in stale_names:
@@ -256,6 +294,12 @@ def apply(wait: bool = False, snapshot_new: bool = True) -> None:
 
     selected_names = {str(db["name"]) for db in selected}
     for db in databases:
+        if str(db["name"]) in cutover_sources:
+            print(
+                f"Skipping primary {connector_name(str(db['name']))}: an active "
+                "replacement is cut over for this source."
+            )
+            continue
         if str(db["name"]) not in selected_names:
             print(
                 f"Skipping {connector_name(str(db['name']))}: no enabled tables "
@@ -273,7 +317,7 @@ def apply(wait: bool = False, snapshot_new: bool = True) -> None:
             old_config = None
             if name in registered_set:
                 old_config = request("GET", f"/connectors/{name}/config")
-            desired_config = build_connector(db, tables)
+            desired_config = primary_runtime_config(db, build_connector(db, tables))
             new_tables = included_tables(desired_config) - included_tables(old_config)
             # Debezium validates MySQL during this REST request. A failed or
             # firewalled source can take over 30 seconds to return its error.
@@ -330,13 +374,28 @@ def apply(wait: bool = False, snapshot_new: bool = True) -> None:
     )
 
 
-def statuses() -> bool:
+def statuses(source: str | None = None) -> bool:
     names = request("GET", "/connectors")
-    managed = [name for name in names if str(name).startswith(MANAGED_PREFIX)]
     tables = load_tables()
+    databases = load_databases()
+    if source is not None:
+        if not any(str(db["name"]) == source for db in databases):
+            raise ValueError(f"Unknown or disabled source: {source}")
+        databases = [db for db in databases if str(db["name"]) == source]
+    primary_names = {connector_name(str(db["name"])) for db in databases}
+    replacements = active_replacements()
+    replacement_names = {
+        str(item["connector"]) for item in replacements
+        if source is None or item.get("source") == source
+    }
+    expected_stopped = {
+        connector_name(str(item["source"])) for item in replacements
+        if item.get("state") == "cutover"
+    }
+    managed = [name for name in names if str(name) in primary_names | replacement_names]
     expected = {
         connector_name(str(db["name"]))
-        for db in load_databases()
+        for db in databases
         if eligible_tables(db, tables)
     }
     missing = sorted(expected - {str(name) for name in managed})
@@ -351,6 +410,9 @@ def statuses() -> bool:
         connector_state = status.get("connector", {}).get("state", "UNKNOWN")
         task_states = ", ".join(str(task.get("state", "UNKNOWN")) for task in status.get("tasks", []))
         print(f"{name}: connector={connector_state}, tasks={task_states or 'none'}")
+        if name in expected_stopped and connector_state in {"STOPPED", "PAUSED"}:
+            print("  expected: original connector preserved and stopped after replacement cutover")
+            continue
         if connector_state != "RUNNING" or not status.get("tasks"):
             healthy = False
         for task in status.get("tasks", []):
