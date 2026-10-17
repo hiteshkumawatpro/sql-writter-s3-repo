@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -13,7 +14,7 @@ import pyarrow.parquet as pq
 
 from .config import load_s3
 from .operations import table_config
-from .runtime_state import RUNTIME, active_replacements
+from .runtime_state import RUNTIME
 from .sink import S3Writer
 
 
@@ -23,12 +24,6 @@ def reconcile(source: str, table_name: str) -> bool:
     s3 = document["s3"]
     client = S3Writer(s3).client
     table_key = table.key.strip("/")
-    replacements = [
-        item for item in active_replacements()
-        if item.get("source") == source and item.get("state") != "cutover"
-    ]
-    if replacements:
-        table_key = f"replacements/{replacements[-1]['connector']}/{table_key}"
     root = "/".join(
         part for part in (str(s3.get("prefix", "")).strip("/"), table_key) if part
     ) + "/"
@@ -58,11 +53,28 @@ def reconcile(source: str, table_name: str) -> bool:
                     path = Path(temporary) / "part.parquet"
                     client.download_file(s3["bucket"], key, str(path))
                     parquet = pq.ParquetFile(path)
-                    if "_cdc_event_id" not in parquet.schema.names:
+                    available = set(parquet.schema.names)
+                    if "_cdc_event_id" not in available:
                         without_id += parquet.metadata.num_rows
                         continue
-                    for batch in parquet.iter_batches(columns=["_cdc_event_id"]):
-                        for event_id in batch.column(0).to_pylist():
+                    coordinate_columns = [
+                        "_cdc_source", "_cdc_database", "_cdc_table",
+                        "_cdc_binlog_file", "_cdc_binlog_position",
+                        "_cdc_binlog_row", "_cdc_operation",
+                    ]
+                    columns = ["_cdc_event_id"] + [
+                        column for column in coordinate_columns if column in available
+                    ]
+                    for batch in parquet.iter_batches(columns=columns):
+                        for row in batch.to_pylist():
+                            event_id = row.get("_cdc_event_id")
+                            if (
+                                row.get("_cdc_operation") != "snapshot"
+                                and row.get("_cdc_binlog_file")
+                                and all(column in row for column in coordinate_columns)
+                            ):
+                                coordinate = ":".join(str(row.get(column)) for column in coordinate_columns)
+                                event_id = hashlib.sha256(coordinate.encode()).hexdigest()
                             rows += 1
                             if event_id is None:
                                 without_id += 1

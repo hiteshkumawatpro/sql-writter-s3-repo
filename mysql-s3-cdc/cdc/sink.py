@@ -8,10 +8,10 @@ import logging
 import os
 import re
 import signal
+import sqlite3
 import tempfile
 import time
 from collections import defaultdict
-from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ from .config import (
     load_yaml,
 )
 from .discovery import _write_atomic, file_lock
-from .runtime_state import STATE_PATH, active_replacements, record_snapshot_rows
+from .runtime_state import RUNTIME, STATE_PATH, active_replacements, record_snapshot_rows
 
 
 LOG = logging.getLogger("KafkaS3Archive")
@@ -41,6 +41,48 @@ OPERATION_NAMES = {"c": "insert", "r": "snapshot", "u": "update", "d": "delete"}
 
 class SchemaEvolutionError(RuntimeError):
     """A record batch cannot be represented by one Parquet schema."""
+
+
+class EventLedger:
+    """Durable event-ID ledger used to suppress connector/restart replays."""
+
+    def __init__(self) -> None:
+        path = RUNTIME / "reconciliation" / "event-manifest.sqlite3"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(path, timeout=30)
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS events (source TEXT, table_name TEXT, "
+            "event_id TEXT, object_key TEXT, occurrences INTEGER NOT NULL, "
+            "PRIMARY KEY(source, table_name, event_id))"
+        )
+        self.connection.commit()
+
+    def unseen(self, table: TableConfig, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = []
+        for row in rows:
+            event_id = str(row.get("_cdc_event_id") or "")
+            exists = self.connection.execute(
+                "SELECT 1 FROM events WHERE source=? AND table_name=? AND event_id=?",
+                (table.source, table.table, event_id),
+            ).fetchone()
+            if not exists:
+                result.append(row)
+        return result
+
+    def record(self, table: TableConfig, rows: list[dict[str, Any]], object_key: str) -> None:
+        self.connection.executemany(
+            "INSERT INTO events VALUES (?, ?, ?, ?, 1) "
+            "ON CONFLICT(source, table_name, event_id) DO UPDATE SET "
+            "occurrences=occurrences+1",
+            [
+                (table.source, table.table, str(row["_cdc_event_id"]), object_key)
+                for row in rows
+            ],
+        )
+        self.connection.commit()
+
+    def close(self) -> None:
+        self.connection.close()
 
 
 def topic_map() -> dict[str, TableConfig]:
@@ -76,15 +118,9 @@ def topic_map() -> dict[str, TableConfig]:
         mapping[f"{prefix}.{table.database}.{table.table}"] = table
         for replacement in replacements:
             if replacement.get("source") == table.source:
-                routed_table = table
-                if replacement.get("state") != "cutover":
-                    routed_table = replace(
-                        table,
-                        key=f"replacements/{replacement['connector']}/{table.key}",
-                    )
                 mapping[
                     f"{replacement['topic_prefix']}.{table.database}.{table.table}"
-                ] = routed_table
+                ] = table
     return mapping
 
 
@@ -119,10 +155,18 @@ def event_record(envelope: dict[str, Any], message, table: TableConfig) -> dict[
         "_cdc_kafka_topic": message.topic(),
         "_cdc_kafka_partition": message.partition(),
         "_cdc_kafka_offset": message.offset(),
-        "_cdc_event_id": hashlib.sha256(
-            f"{message.topic()}:{message.partition()}:{message.offset()}".encode()
-        ).hexdigest(),
     })
+    coordinate = ":".join(str(part) for part in (
+        table.source, table.database, table.table, source.get("file"),
+        source.get("pos"), source.get("row"),
+        OPERATION_NAMES.get(operation, operation),
+    ))
+    # Live events replayed through a recovery connector retain their MySQL
+    # coordinate and therefore the same event ID. Snapshot rows do not have a
+    # portable cross-connector row identity, so Kafka coordinates are used.
+    if operation == "r" or not source.get("file"):
+        coordinate = f"{message.topic()}:{message.partition()}:{message.offset()}"
+    record["_cdc_event_id"] = hashlib.sha256(coordinate.encode()).hexdigest()
     return record
 
 
@@ -206,7 +250,11 @@ class S3Writer:
             end_offset = max(int(row["_cdc_kafka_offset"]) for row in day_rows)
             directory = "/".join(part for part in (prefix, table.key.strip("/")) if part)
             directory += f"/year={day.year:04d}/month={day.month:02d}/day={day.day:02d}"
-            filename = f"part-p{partition:05d}-o{start_offset:020d}-{end_offset:020d}.parquet"
+            topic_token = hashlib.sha256(topic.encode()).hexdigest()[:12]
+            filename = (
+                f"part-t{topic_token}-p{partition:05d}-"
+                f"o{start_offset:020d}-{end_offset:020d}.parquet"
+            )
             object_key = f"{directory}/{filename}"
             with tempfile.TemporaryDirectory(prefix="mysql-cdc-") as temporary:
                 path = Path(temporary) / filename
@@ -272,7 +320,11 @@ def quarantine_schema_batch(
     )
 
 
-def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]]) -> None:
+def flush(
+    consumer: Consumer, writer: S3Writer,
+    buffered: list[tuple[Any, TableConfig, dict[str, Any] | None]],
+    ledger: EventLedger,
+) -> None:
     uploads: dict[tuple[str, int, TableConfig], list[dict[str, Any]]] = defaultdict(list)
     offsets: dict[tuple[str, int], int] = {}
     for message, table, record in buffered:
@@ -281,12 +333,22 @@ def flush(consumer: Consumer, writer: S3Writer, buffered: list[tuple[Any, TableC
         if record is not None:
             uploads[(message.topic(), message.partition(), table)].append(record)
     for (topic, partition, table), rows in uploads.items():
+        original_count = len(rows)
+        rows = ledger.unseen(table, rows)
+        if len(rows) != original_count:
+            LOG.warning(
+                "Suppressed %d already-archived CDC event(s) for %s.%s",
+                original_count - len(rows), table.source, table.table,
+            )
+        if not rows:
+            continue
         try:
             last_lsn, store_key = writer.upload(table, topic, partition, rows)
         except SchemaEvolutionError as exc:
             quarantine_schema_batch(table, topic, partition, rows, exc)
             continue
         store_table_progress(table, last_lsn, store_key)
+        ledger.record(table, rows, store_key)
         snapshot_rows = sum(row.get("_cdc_operation") == "snapshot" for row in rows)
         streaming = any(row.get("_cdc_operation") != "snapshot" for row in rows)
         record_snapshot_rows(table.source, table.table, snapshot_rows, streaming)
@@ -304,6 +366,7 @@ def main() -> None:
     document = load_s3()
     sink_config = document["sink"]
     writer = S3Writer(document["s3"])
+    ledger = EventLedger()
     consumer = Consumer({
         "bootstrap.servers": os.getenv("CDC_KAFKA_BOOTSTRAP", "127.0.0.1:9092"),
         "group.id": str(sink_config.get("consumer_group", "mysql-s3-cdc-sink-v1")),
@@ -368,7 +431,7 @@ def main() -> None:
                         buffered.append((message, table, record))
             if buffered and (len(buffered) >= batch_size or time.monotonic() - last_flush >= flush_seconds):
                 try:
-                    flush(consumer, writer, buffered)
+                    flush(consumer, writer, buffered, ledger)
                 except Exception:
                     # Keep the uncommitted batch in memory so a temporary S3
                     # outage cannot lose Kafka records or terminate the sink.
@@ -381,9 +444,10 @@ def main() -> None:
                     buffered.clear()
                     last_flush = time.monotonic()
         if buffered:
-            flush(consumer, writer, buffered)
+            flush(consumer, writer, buffered, ledger)
     finally:
         consumer.close()
+        ledger.close()
 
 
 if __name__ == "__main__":

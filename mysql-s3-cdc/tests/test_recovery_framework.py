@@ -58,6 +58,26 @@ class ConnectorScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cutover refused"):
             operations.replacement_cutover("any", verified=False)
 
+    def test_primary_handoff_requires_explicit_verification(self):
+        with self.assertRaisesRegex(ValueError, "handoff refused"):
+            operations.handoff_to_primary("any", verified=False)
+
+    def test_adopt_replacement_does_not_update_connector(self):
+        live = {
+            "database.include.list": "db_a", "topic.prefix": "source_a-recovery1",
+            "database.server.id": "6401",
+            "schema.history.internal.kafka.topic": "schemahistory.recovery1",
+        }
+        with (
+            patch.object(operations, "source_config", return_value=database()),
+            patch.object(operations, "request") as request,
+            patch.object(operations, "update_control_entry") as update,
+        ):
+            request.side_effect = [live, {"tasks": [{"state": "RUNNING"}]}]
+            operations.adopt_replacement("source_a", "existing-recovery")
+        self.assertEqual([call.args[0] for call in request.call_args_list], ["GET", "GET"])
+        update.assert_called_once()
+
 
 class SnapshotLifecycleTests(unittest.TestCase):
     def test_runtime_snapshot_state_is_durable(self):
@@ -85,6 +105,31 @@ class SnapshotLifecycleTests(unittest.TestCase):
         second = sink.event_record(envelope, message, configured)
         self.assertEqual(first["_cdc_event_id"], second["_cdc_event_id"])
         self.assertEqual(len(first["_cdc_event_id"]), 64)
+
+    def test_live_event_id_survives_connector_topic_change(self):
+        first_message = SimpleNamespace(
+            topic=lambda: "original.db.orders", partition=lambda: 0,
+            offset=lambda: 42,
+        )
+        second_message = SimpleNamespace(
+            topic=lambda: "recovery.db.orders", partition=lambda: 0,
+            offset=lambda: 999,
+        )
+        configured = SimpleNamespace(
+            source="source_a", database="db_a", table="orders",
+            accepts=lambda operation: True,
+        )
+        envelope = {
+            "op": "u", "after": {"id": 1},
+            "source": {"file": "binlog.000007", "pos": 1234, "row": 2},
+        }
+        first = sink.event_record(envelope, first_message, configured)
+        second = sink.event_record(envelope, second_message, configured)
+        self.assertEqual(first["_cdc_event_id"], second["_cdc_event_id"])
+
+    def test_binlog_offset_comparison_uses_file_then_position(self):
+        offsets = {"offsets": [{"offset": {"file": "binlog.000009", "pos": 88}}]}
+        self.assertEqual(operations._binlog_coordinate(offsets), (9, 88))
 
     def test_explicit_snapshot_works_when_table_is_already_included(self):
         configured_table = table()
@@ -126,7 +171,7 @@ class SnapshotLifecycleTests(unittest.TestCase):
         self.assertEqual(result["snapshot.mode"], "no_data")
         self.assertEqual(result["schema.history.internal.kafka.topic"], "new-history")
 
-    def test_replacement_topics_use_isolated_s3_key_before_cutover(self):
+    def test_replacement_topics_keep_configured_s3_key(self):
         configured = TableConfig(
             1, "source_a", "db_a", "orders", "db_a/orders",
             True, True, True, True, None,
@@ -142,9 +187,22 @@ class SnapshotLifecycleTests(unittest.TestCase):
         ):
             mapping = sink.topic_map()
         routed = mapping["source_a-recovery.db_a.orders"]
-        self.assertEqual(
-            routed.key, "replacements/replacement-one/db_a/orders"
+        self.assertEqual(routed.key, "db_a/orders")
+
+    def test_event_ledger_suppresses_an_archived_event(self):
+        configured = TableConfig(
+            1, "source_a", "db_a", "orders", "db_a/orders",
+            True, True, True, True, None,
         )
+        rows = [{"_cdc_event_id": "event-one"}]
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            sink, "RUNTIME", Path(directory)
+        ):
+            ledger = sink.EventLedger()
+            self.assertEqual(ledger.unseen(configured, rows), rows)
+            ledger.record(configured, rows, "object.parquet")
+            self.assertEqual(ledger.unseen(configured, rows), [])
+            ledger.close()
 
 
 if __name__ == "__main__":

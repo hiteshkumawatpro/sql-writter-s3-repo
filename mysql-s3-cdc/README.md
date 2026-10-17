@@ -122,6 +122,11 @@ That source pauses while existing rows are emitted, then resumes from its binlog
 position; Kafka, the S3 sink, and other sources remain online. Tables without a
 primary key are supported by this snapshot mode.
 
+Historical snapshot rows and subsequent insert/update/delete events always use
+the same `key` from `config/tables.yml`. Recovery and replacement connector
+identities are internal and never add `replacement/`, `recovery/`, or
+`backfill/` directories to ordinary CDC output.
+
 The connector retains schema history for visible tables before they are
 enabled. This prevents future late-enabled tables from failing with `schema
 isn't known`. It is preventive, not retroactive: a connector whose history was
@@ -249,10 +254,13 @@ password and must be protected with the rest of `runtime/`.
 History recovery is permitted only after a DBA establishes that today's table
 schemas are compatible with every unprocessed event after the connector's
 stored binlog offset. The flag is an assertion, not an automatic compatibility
-test:
+test. `--missing-schema-confirmed` is additionally required when an intentionally
+stopped connector no longer exposes its original failure trace through REST; use
+it only after confirming the missing-schema error in the preserved Connect log:
 
 ```bash
-python manage.py recover --source JK_BTP_PPDS --strategy history --ddl-compatible --yes
+python manage.py recover --source JK_BTP_PPDS --strategy history \
+  --ddl-compatible --missing-schema-confirmed --yes
 python manage.py status --source JK_BTP_PPDS
 # Inspect runtime/logs/connect.log and confirm recovery completed.
 python manage.py recovery-finalize --source JK_BTP_PPDS --recovery-complete --yes
@@ -277,24 +285,40 @@ python manage.py recover --source JK_BTP_PPDS --strategy replacement \
 python manage.py status --source JK_BTP_PPDS
 ```
 
-The replacement has a separate connector identity, server ID, topic prefix,
-offsets and history topic. Its S3 output is initially isolated under
-`replacements/<connector>/...`. After validating its snapshot and live events:
+The replacement has a separate internal connector identity, server ID, topic
+prefix, offsets and history topic. Its historical and live records still use
+the table's configured S3 key. Topic-specific object filenames prevent Kafka
+offset collisions between the original and replacement connectors. After
+validating its snapshot and live events:
 
 ```bash
 python manage.py replacement-cutover --source JK_BTP_PPDS --verified --yes
 ```
 
-Cutover stops but does not delete the original connector and routes subsequent
-replacement events to normal table keys. Rollback preserves all state:
+Cutover stops but does not delete the original connector. Rollback preserves all state:
 
 ```bash
 python manage.py replacement-rollback --source JK_BTP_PPDS --yes
 ```
 
 Because a keyless table has no stable database row identity, no system can
-automatically prove that two snapshots contain the same logical row. Keep the
-isolated replacement snapshot until it has been reconciled and approved.
+automatically prove that two independent snapshots contain the same logical
+row. Reconcile and approve replacement output before cutover.
+
+Older releases temporarily routed replacement output below
+`replacements/<connector>/`. Migrate one verified table at a time into its
+configured logical destination. The command performs a dry run unless `--yes`
+is supplied, uses collision-safe filenames, verifies copied object sizes and
+never deletes the legacy source objects:
+
+```bash
+python manage.py migrate-routing --source JK_BTP_PPDS \
+  --table BTP_Schedule_Floor_Monthly \
+  --connector mysql-s3-cdc-JK_BTP_PPDS-replacement-recovery1
+python manage.py migrate-routing --source JK_BTP_PPDS \
+  --table BTP_Schedule_Floor_Monthly \
+  --connector mysql-s3-cdc-JK_BTP_PPDS-replacement-recovery1 --yes
+```
 
 ### Snapshot lifecycle, schema quarantine and duplicate reports
 
@@ -304,9 +328,11 @@ Snapshot requests and observed S3 rows are stored in
 current source count and requires a running task; concurrent source changes can
 make the counts differ, in which case it safely remains incomplete.
 
-Every new event contains `_cdc_event_id`, a stable hash of its Kafka
-topic/partition/offset. To build an S3 manifest and report duplicates without
-deleting or rewriting any object:
+Every new event contains `_cdc_event_id`. Live-event IDs use MySQL binlog
+coordinates, so the same event replayed through a recovery connector is
+recognized; snapshot events fall back to Kafka coordinates. The sink maintains
+a durable SQLite event ledger and suppresses already archived IDs. To rebuild
+the ledger from S3 and report duplicates without deleting or rewriting objects:
 
 ```bash
 python manage.py reconcile --source JK_BTP_PPDS --table BTP_Schedule_Floor_Monthly
@@ -321,6 +347,51 @@ Rows that cannot share a valid Arrow/Parquet schema are isolated under
 are committed only after the quarantine file is flushed to disk, allowing other
 topic partitions to continue. Operators must correct and replay quarantined
 records; quarantine is not a replacement for S3 archival.
+
+### Return a recovery connector to the original production connector
+
+For an existing `JK_BTP_PPDS-recovery1` deployment, first deploy the new sink.
+If the connector was created manually or by an older release, register its exact
+Kafka Connect name first. This validates and reads its configuration but does
+not change the connector:
+
+```bash
+python manage.py adopt-replacement --source JK_BTP_PPDS \
+  --connector mysql-s3-cdc-JK_BTP_PPDS-replacement-recovery1
+python manage.py restart-workers
+```
+
+Dry-run and then copy only the verified legacy table output into its configured
+logical destination; source objects are retained:
+
+```bash
+python manage.py migrate-routing --source JK_BTP_PPDS \
+  --table BTP_Schedule_Floor_Monthly \
+  --connector mysql-s3-cdc-JK_BTP_PPDS-replacement-recovery1
+python manage.py migrate-routing --source JK_BTP_PPDS \
+  --table BTP_Schedule_Floor_Monthly \
+  --connector mysql-s3-cdc-JK_BTP_PPDS-replacement-recovery1 --yes
+python manage.py reconcile --source JK_BTP_PPDS \
+  --table BTP_Schedule_Floor_Monthly
+```
+
+Next perform guarded history recovery on the preserved original connector as
+described above. Do not request another table snapshot when the replacement's
+verified historical snapshot has already been migrated. Leave both connectors
+running until the original catches up. The sink's MySQL-coordinate event ledger
+suppresses replayed live events.
+
+Finally, hand control back only after application-level live CDC validation:
+
+```bash
+python manage.py primary-handoff --source JK_BTP_PPDS --verified --yes
+```
+
+The command reads both Kafka Connect offset endpoints and refuses handoff until
+the original binlog file/position is at least the replacement position. It then
+stops, but does not delete, the replacement. The original connector name and
+topic prefix remain the production identity, and all Kafka topics, consumer
+offsets, schema histories, legacy S3 objects and migration reports are retained.
 
 Connector application is isolated per database. A MySQL source that times out
 or fails Debezium validation is logged and skipped while other connectors and

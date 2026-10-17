@@ -7,9 +7,10 @@ from .config import load_databases, load_tables, validate_all
 from .connectors import apply, statuses
 from .discovery import discover
 from .operations import (
-    begin_history_recovery, create_replacement, finalize_history_recovery,
-    recovery_plan, replacement_cutover, replacement_rollback, snapshot_table,
-    verify_table,
+    adopt_replacement, begin_history_recovery, create_replacement,
+    finalize_history_recovery,
+    handoff_to_primary, recovery_plan, replacement_cutover,
+    replacement_rollback, snapshot_table, verify_table,
 )
 
 
@@ -34,6 +35,7 @@ def main() -> None:
     recover_parser.add_argument("--source", required=True)
     recover_parser.add_argument("--strategy", choices=("history", "replacement"), required=True)
     recover_parser.add_argument("--ddl-compatible", action="store_true")
+    recover_parser.add_argument("--missing-schema-confirmed", action="store_true")
     recover_parser.add_argument("--server-id", type=int)
     recover_parser.add_argument("--suffix")
     recover_parser.add_argument("--yes", action="store_true")
@@ -55,6 +57,13 @@ def main() -> None:
     rollback_parser = subparsers.add_parser("replacement-rollback")
     rollback_parser.add_argument("--source", required=True)
     rollback_parser.add_argument("--yes", action="store_true")
+    adopt_parser = subparsers.add_parser("adopt-replacement")
+    adopt_parser.add_argument("--source", required=True)
+    adopt_parser.add_argument("--connector", required=True)
+    handoff_parser = subparsers.add_parser("primary-handoff")
+    handoff_parser.add_argument("--source", required=True)
+    handoff_parser.add_argument("--verified", action="store_true")
+    handoff_parser.add_argument("--yes", action="store_true")
     args = parser.parse_args()
     if args.command == "validate":
         warnings = validate_all()
@@ -77,7 +86,9 @@ def main() -> None:
         if not args.yes:
             raise ValueError("recover changes connector state; rerun with --yes")
         if args.strategy == "history":
-            begin_history_recovery(args.source, args.ddl_compatible)
+            begin_history_recovery(
+                args.source, args.ddl_compatible, args.missing_schema_confirmed
+            )
         else:
             if args.server_id is None:
                 raise ValueError("replacement recovery requires --server-id")
@@ -101,6 +112,12 @@ def main() -> None:
         if not args.yes:
             raise ValueError("replacement-rollback changes running connectors; rerun with --yes")
         replacement_rollback(args.source)
+    elif args.command == "adopt-replacement":
+        adopt_replacement(args.source, args.connector)
+    elif args.command == "primary-handoff":
+        if not args.yes:
+            raise ValueError("primary-handoff stops the replacement connector; rerun with --yes")
+        handoff_to_primary(args.source, args.verified)
 
 
 if __name__ == "__main__":

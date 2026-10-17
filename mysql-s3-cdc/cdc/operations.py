@@ -90,7 +90,9 @@ def recovery_plan(source: str) -> bool:
     return schema_failure
 
 
-def begin_history_recovery(source: str, ddl_compatible: bool) -> None:
+def begin_history_recovery(
+    source: str, ddl_compatible: bool, missing_schema_confirmed: bool = False,
+) -> None:
     if not ddl_compatible:
         raise ValueError(
             "History recovery refused: provide --ddl-compatible only after a DBA "
@@ -101,8 +103,15 @@ def begin_history_recovery(source: str, ddl_compatible: bool) -> None:
     path, backup = connector_backup(source)
     status = backup.get("status") or {}
     traces = " ".join(str(task.get("trace", "")) for task in status.get("tasks", []))
-    if not fatal_failure(traces) or "schema" not in traces.lower():
-        raise RuntimeError("Guarded recovery requires a recorded missing-schema task failure")
+    if (
+        (not fatal_failure(traces) or "schema" not in traces.lower())
+        and not missing_schema_confirmed
+    ):
+        raise RuntimeError(
+            "Guarded recovery requires a recorded missing-schema task failure. "
+            "For an intentionally stopped connector whose REST status lost the "
+            "trace, rerun only after log review with --missing-schema-confirmed."
+        )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     new_history = f"schemahistory.{db['topic_prefix']}.recovery-{stamp}"
     recovery_db = copy.deepcopy(db)
@@ -254,8 +263,37 @@ def create_replacement(source: str, server_id: int, suffix: str | None = None) -
         )
     print(f"Created replacement {name} with topic prefix {replacement['topic_prefix']}.")
     print(
-        "Replacement output is isolated under replacements/<connector>/ until "
-        "an explicit cutover. The original connector, history, offsets and S3 data were not modified."
+        "Replacement output uses the same configured table S3 destinations with "
+        "topic-specific filenames. The original connector, history, offsets and S3 data were not modified."
+    )
+
+
+def adopt_replacement(source: str, name: str) -> None:
+    """Register an existing recovery connector without changing it."""
+    db = source_config(source)
+    config = request("GET", f"/connectors/{name}/config")
+    status = request("GET", f"/connectors/{name}/status")
+    if str(config.get("database.include.list")) != str(db["database"]):
+        raise RuntimeError(
+            f"{name} captures database {config.get('database.include.list')!r}, "
+            f"not configured source database {db['database']!r}"
+        )
+    prefix = str(config.get("topic.prefix") or "")
+    if not prefix or prefix == str(db["topic_prefix"]):
+        raise RuntimeError("Adopted recovery connector must have a distinct topic.prefix")
+    if not status.get("tasks") or any(
+        str(task.get("state")) != "RUNNING" for task in status["tasks"]
+    ):
+        raise RuntimeError(f"Cannot adopt {name}: connector task is not RUNNING")
+    update_control_entry(
+        "replacements", name, state="cutover", source=source, connector=name,
+        server_id=int(config["database.server.id"]), topic_prefix=prefix,
+        schema_history_topic=str(config["schema.history.internal.kafka.topic"]),
+        adopted_at=utc_now(),
+    )
+    print(
+        f"Adopted existing recovery connector {name} for {source}. Its live "
+        "configuration, offsets, topics and history were not modified."
     )
 
 
@@ -263,7 +301,7 @@ def replacement_cutover(source: str, verified: bool) -> None:
     if not verified:
         raise ValueError(
             "Replacement cutover refused: pass --verified only after reviewing "
-            "isolated S3 output, connector health, counts and live CDC continuity"
+            "S3 output, connector health, counts and live CDC continuity"
         )
     state = load_state()
     matches = [
@@ -306,4 +344,69 @@ def replacement_rollback(source: str) -> None:
     )
     print(
         f"Rolled back {source}; replacement stopped and original resumed. No connector or topic was deleted."
+    )
+
+
+def _binlog_coordinate(offsets: Any) -> tuple[int, int]:
+    """Extract the greatest MySQL binlog file number/position from Connect offsets."""
+    found: list[tuple[int, int]] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("file") is not None and value.get("pos") is not None:
+                match = re.search(r"(\d+)$", str(value["file"]))
+                found.append((int(match.group(1)) if match else 0, int(value["pos"])))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(offsets)
+    if not found:
+        raise RuntimeError("Kafka Connect offsets did not contain a MySQL binlog file/position")
+    return max(found)
+
+
+def handoff_to_primary(source: str, verified: bool) -> None:
+    """Retire a caught-up replacement and keep the original connector running."""
+    if not verified:
+        raise ValueError(
+            "Primary handoff refused: pass --verified only after migration, "
+            "reconciliation, schema recovery and live CDC validation"
+        )
+    replacements = [
+        item for item in active_replacements() if item.get("source") == source
+    ]
+    if len(replacements) != 1:
+        raise ValueError(f"Expected exactly one active replacement for {source}; found {len(replacements)}")
+    replacement = replacements[0]
+    primary_name = connector_name(source)
+    for name in (primary_name, str(replacement["connector"])):
+        status = request("GET", f"/connectors/{name}/status")
+        if not status.get("tasks") or any(
+            str(task.get("state")) != "RUNNING" for task in status["tasks"]
+        ):
+            raise RuntimeError(f"Handoff refused because {name} is not RUNNING")
+    primary_offset = _binlog_coordinate(
+        request("GET", f"/connectors/{primary_name}/offsets")
+    )
+    replacement_offset = _binlog_coordinate(
+        request("GET", f"/connectors/{replacement['connector']}/offsets")
+    )
+    if primary_offset < replacement_offset:
+        raise RuntimeError(
+            f"Original connector has not caught up: primary={primary_offset}, "
+            f"replacement={replacement_offset}"
+        )
+    request("PUT", f"/connectors/{replacement['connector']}/stop")
+    update_control_entry(
+        "replacements", str(replacement["connector"]), state="retired",
+        retired_at=utc_now(), primary_offset=list(primary_offset),
+        replacement_offset=list(replacement_offset),
+    )
+    print(
+        f"Primary handoff complete for {source}. {primary_name} remains running; "
+        f"{replacement['connector']} is stopped but not deleted. Kafka consumer "
+        "offsets, topics, schema history and S3 objects were preserved."
     )

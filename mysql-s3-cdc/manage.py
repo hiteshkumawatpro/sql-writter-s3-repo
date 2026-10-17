@@ -545,6 +545,7 @@ def main() -> None:
     recover_parser.add_argument("--source", required=True)
     recover_parser.add_argument("--strategy", choices=("history", "replacement"), required=True)
     recover_parser.add_argument("--ddl-compatible", action="store_true")
+    recover_parser.add_argument("--missing-schema-confirmed", action="store_true")
     recover_parser.add_argument("--server-id", type=int)
     recover_parser.add_argument("--suffix")
     recover_parser.add_argument("--yes", action="store_true")
@@ -566,9 +567,30 @@ def main() -> None:
     rollback_parser = subparsers.add_parser("replacement-rollback", help="Stop replacement and resume preserved original connector.")
     rollback_parser.add_argument("--source", required=True)
     rollback_parser.add_argument("--yes", action="store_true")
+    adopt_parser = subparsers.add_parser(
+        "adopt-replacement",
+        help="Register an existing recovery connector without modifying it.",
+    )
+    adopt_parser.add_argument("--source", required=True)
+    adopt_parser.add_argument("--connector", required=True)
+    handoff_parser = subparsers.add_parser(
+        "primary-handoff",
+        help="Stop a caught-up replacement and retain the original connector as primary.",
+    )
+    handoff_parser.add_argument("--source", required=True)
+    handoff_parser.add_argument("--verified", action="store_true")
+    handoff_parser.add_argument("--yes", action="store_true")
     reconcile_parser = subparsers.add_parser("reconcile", help="Scan S3 and build a duplicate-event manifest without deleting objects.")
     reconcile_parser.add_argument("--source", required=True)
     reconcile_parser.add_argument("--table", required=True)
+    migration_parser = subparsers.add_parser(
+        "migrate-routing",
+        help="Copy legacy replacement-path objects into the configured table path.",
+    )
+    migration_parser.add_argument("--source", required=True)
+    migration_parser.add_argument("--table", required=True)
+    migration_parser.add_argument("--connector")
+    migration_parser.add_argument("--yes", action="store_true")
     subparsers.add_parser("validate", help="Validate all YAML configuration.")
     subparsers.add_parser("verify-bundle", help="Check required offline files and Kafka checksum.")
     args = parser.parse_args()
@@ -637,6 +659,8 @@ def main() -> None:
             ]
             if args.ddl_compatible:
                 command.append("--ddl-compatible")
+            if args.missing_schema_confirmed:
+                command.append("--missing-schema-confirmed")
             if args.server_id is not None:
                 command.extend(("--server-id", str(args.server_id)))
             if args.suffix:
@@ -664,18 +688,33 @@ def main() -> None:
                 "-m", "cdc.cli", "verify-table", "--source", args.source,
                 "--table", args.table,
             )
-        elif args.command in {"replacement-cutover", "replacement-rollback"}:
+        elif args.command in {"replacement-cutover", "replacement-rollback", "primary-handoff"}:
             command = ["-m", "cdc.cli", args.command, "--source", args.source]
-            if args.command == "replacement-cutover" and args.verified:
+            if args.command in {"replacement-cutover", "primary-handoff"} and args.verified:
                 command.append("--verified")
             if args.yes:
                 command.append("--yes")
             python_command(*command)
+        elif args.command == "adopt-replacement":
+            python_command(
+                "-m", "cdc.cli", "adopt-replacement", "--source", args.source,
+                "--connector", args.connector,
+            )
         elif args.command == "reconcile":
             python_command(
                 "-m", "cdc.reconcile", "--source", args.source,
                 "--table", args.table,
             )
+        elif args.command == "migrate-routing":
+            command = [
+                "-m", "cdc.routing_migration", "--source", args.source,
+                "--table", args.table,
+            ]
+            if args.connector:
+                command.extend(("--connector", args.connector))
+            if args.yes:
+                command.append("--yes")
+            python_command(*command)
         elif args.command == "validate":
             python_command("-m", "cdc.cli", "validate")
         elif args.command == "verify-bundle":
