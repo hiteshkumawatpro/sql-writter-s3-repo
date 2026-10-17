@@ -180,7 +180,13 @@ def temporal_columns() -> dict[tuple[str, str, str], dict[str, str]]:
 
 
 def normalize_temporal_value(value: Any, data_type: str) -> Any:
-    if value is None or isinstance(value, (date, datetime, datetime_time)):
+    if value is None:
+        return value
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0)
+    if isinstance(value, datetime_time):
+        return value.replace(microsecond=0)
+    if isinstance(value, date):
         return value
     if data_type == "date":
         if isinstance(value, (int, float)):
@@ -192,18 +198,27 @@ def normalize_temporal_value(value: Any, data_type: str) -> Any:
             hours, micros = divmod(micros, 3_600_000_000)
             minutes, micros = divmod(micros, 60_000_000)
             seconds, micros = divmod(micros, 1_000_000)
-            return datetime_time(hours % 24, minutes, seconds, micros)
-        return datetime_time.fromisoformat(str(value).rstrip("Z"))
+            return datetime_time(hours % 24, minutes, seconds)
+        return datetime_time.fromisoformat(str(value).rstrip("Z")).replace(
+            microsecond=0
+        )
     if data_type == "datetime":
         if isinstance(value, (int, float)):
             divisor = 1_000_000 if abs(float(value)) >= 100_000_000_000_000 else 1_000
-            return datetime.fromtimestamp(float(value) / divisor, timezone.utc).replace(tzinfo=None)
-        return datetime.fromisoformat(str(value).rstrip("Z").replace(" ", "T"))
+            return datetime.fromtimestamp(
+                float(value) / divisor, timezone.utc
+            ).replace(tzinfo=None, microsecond=0)
+        return datetime.fromisoformat(
+            str(value).rstrip("Z").replace(" ", "T")
+        ).replace(microsecond=0)
     # MySQL TIMESTAMP is emitted by Debezium as an ISO UTC ZonedTimestamp.
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value) / 1_000, timezone.utc)
+        return datetime.fromtimestamp(float(value) / 1_000, timezone.utc).replace(
+            microsecond=0
+        )
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00").replace(" ", "T"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed.replace(microsecond=0)
 
 
 def normalize_temporal_record(

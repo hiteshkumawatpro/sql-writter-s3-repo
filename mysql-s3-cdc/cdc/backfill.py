@@ -25,6 +25,12 @@ def normalize_mysql_temporals(record: dict[str, Any]) -> dict[str, Any]:
     """Keep MySQL temporal fields as Arrow-compatible logical values."""
     normalized = dict(record)
     for column, value in normalized.items():
+        if isinstance(value, datetime):
+            normalized[column] = value.replace(microsecond=0)
+            continue
+        if isinstance(value, datetime_time):
+            normalized[column] = value.replace(microsecond=0)
+            continue
         # mysql-connector represents MySQL TIME as timedelta. Arrow needs a
         # native time value. Values outside a clock day remain strings because
         # MySQL TIME also supports durations beyond 24 hours.
@@ -34,7 +40,7 @@ def normalize_mysql_temporals(record: dict[str, Any]) -> dict[str, Any]:
                 hours, remainder = divmod(total_micros, 3_600_000_000)
                 minutes, remainder = divmod(remainder, 60_000_000)
                 seconds, micros = divmod(remainder, 1_000_000)
-                normalized[column] = datetime_time(hours, minutes, seconds, micros)
+                normalized[column] = datetime_time(hours, minutes, seconds)
             else:
                 normalized[column] = str(value)
     return normalized

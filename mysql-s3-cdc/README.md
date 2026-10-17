@@ -444,7 +444,9 @@ timestamp supplies both the date and hour.
 MySQL `DATE`, `TIME`, `DATETIME`, and `TIMESTAMP` source columns are normalized
 before upload and stored using Parquet temporal logical types rather than
 Debezium epoch numbers. This preserves the source column while making temporal
-filters work in Parquet-aware query engines. The generated connector uses
+filters work in Parquet-aware query engines. `TIME`, `DATETIME`, and `TIMESTAMP`
+values are stored at second precision (`HH:MM:SS`); fractional microseconds are
+discarded. The generated connector uses
 Debezium ISO temporal encoding, and the sink also decodes older numeric events
 that may already be waiting in Kafka. Temporal metadata refreshes every five
 minutes, including after supported `ALTER TABLE` changes.
