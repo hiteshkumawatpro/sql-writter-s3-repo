@@ -12,11 +12,12 @@ import sqlite3
 import tempfile
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import boto3
+import mysql.connector
 import pyarrow as pa
 import pyarrow.parquet as pq
 from confluent_kafka import Consumer, KafkaError, TopicPartition
@@ -132,13 +133,102 @@ def sortable_lsn(source: dict[str, Any]) -> str:
     return f"{file_number:020d}:{int(source.get('pos') or 0):020d}:{int(source.get('row') or 0):010d}"
 
 
-def event_record(envelope: dict[str, Any], message, table: TableConfig) -> dict[str, Any] | None:
+def temporal_columns() -> dict[tuple[str, str, str], dict[str, str]]:
+    """Read MySQL temporal column types so schema-less events can be normalized."""
+    result: dict[tuple[str, str, str], dict[str, str]] = {}
+    tables = load_tables()
+    for db in load_databases():
+        source = str(db["name"])
+        enabled_names = {
+            table.table for table in tables
+            if table.enabled and table.source == source
+            and table.database == str(db["database"])
+        }
+        if not enabled_names:
+            continue
+        arguments: dict[str, Any] = {
+            "host": db["host"], "port": int(db.get("port", 3306)),
+            "user": db["username"], "password": db["password"],
+            "database": db["database"], "connection_timeout": 15,
+        }
+        if str(db.get("ssl_mode", "preferred")).lower() == "disabled":
+            arguments["ssl_disabled"] = True
+        connection = None
+        cursor = None
+        try:
+            connection = mysql.connector.connect(**arguments)
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s "
+                "AND DATA_TYPE IN ('date','datetime','timestamp','time')",
+                (str(db["database"]),),
+            )
+            for table_name, column_name, data_type in cursor.fetchall():
+                if str(table_name) in enabled_names:
+                    result.setdefault(
+                        (source, str(db["database"]), str(table_name)), {}
+                    )[str(column_name)] = str(data_type).lower()
+        except Exception as exc:
+            LOG.warning("Could not inspect temporal columns for %s: %s", source, exc)
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
+    return result
+
+
+def normalize_temporal_value(value: Any, data_type: str) -> Any:
+    if value is None or isinstance(value, (date, datetime, datetime_time)):
+        return value
+    if data_type == "date":
+        if isinstance(value, (int, float)):
+            return date(1970, 1, 1) + timedelta(days=int(value))
+        return date.fromisoformat(str(value).rstrip("Z"))
+    if data_type == "time":
+        if isinstance(value, (int, float)):
+            micros = int(value)
+            hours, micros = divmod(micros, 3_600_000_000)
+            minutes, micros = divmod(micros, 60_000_000)
+            seconds, micros = divmod(micros, 1_000_000)
+            return datetime_time(hours % 24, minutes, seconds, micros)
+        return datetime_time.fromisoformat(str(value).rstrip("Z"))
+    if data_type == "datetime":
+        if isinstance(value, (int, float)):
+            divisor = 1_000_000 if abs(float(value)) >= 100_000_000_000_000 else 1_000
+            return datetime.fromtimestamp(float(value) / divisor, timezone.utc).replace(tzinfo=None)
+        return datetime.fromisoformat(str(value).rstrip("Z").replace(" ", "T"))
+    # MySQL TIMESTAMP is emitted by Debezium as an ISO UTC ZonedTimestamp.
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value) / 1_000, timezone.utc)
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00").replace(" ", "T"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def normalize_temporal_record(
+    record: dict[str, Any], table: TableConfig,
+    columns: dict[tuple[str, str, str], dict[str, str]],
+) -> None:
+    for column, data_type in columns.get(
+        (table.source, table.database, table.table), {}
+    ).items():
+        if column in record:
+            record[column] = normalize_temporal_value(record[column], data_type)
+
+
+def event_record(
+    envelope: dict[str, Any], message, table: TableConfig,
+    columns: dict[tuple[str, str, str], dict[str, str]] | None = None,
+) -> dict[str, Any] | None:
     operation = str(envelope.get("op") or "")
     if not table.accepts(operation):
         return None
     source = envelope.get("source") or {}
     row = envelope.get("before") if operation == "d" else envelope.get("after")
     record = dict(row or {})
+    if columns:
+        normalize_temporal_record(record, table, columns)
     # CDC fields deliberately win if a source table uses one of these reserved names.
     record.update({
         "lsn": sortable_lsn(source),
@@ -170,15 +260,21 @@ def event_record(envelope: dict[str, Any], message, table: TableConfig) -> dict[
     return record
 
 
-def partition_day(record: dict[str, Any], table: TableConfig) -> date:
+def partition_hour(record: dict[str, Any], table: TableConfig) -> datetime:
+    def floor_to_hour(value: datetime) -> datetime:
+        return value.replace(minute=0, second=0, microsecond=0)
+
     value = record.get(table.partition_column) if table.partition_column else None
     if value is None:
         milliseconds = int(record.get("_cdc_event_ts_ms") or 0)
-        return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).date()
+        event_time = datetime.fromtimestamp(milliseconds / 1000, timezone.utc)
+        if table.partition_column:
+            return event_time.replace(hour=1, minute=0, second=0, microsecond=0)
+        return floor_to_hour(event_time)
     if isinstance(value, datetime):
-        return value.date()
+        return floor_to_hour(value)
     if isinstance(value, date):
-        return value
+        return datetime.combine(value, datetime_time(hour=1))
     if isinstance(value, (int, float)):
         # Debezium schema-less JSON represents DATE as epoch days, DATETIME
         # as epoch milliseconds or microseconds (depending on precision), and
@@ -186,16 +282,24 @@ def partition_day(record: dict[str, Any], table: TableConfig) -> date:
         # column is therefore normalized by magnitude.
         magnitude = abs(float(value))
         if magnitude < 10_000_000:
-            return date(1970, 1, 1) + timedelta(days=int(value))
+            day = date(1970, 1, 1) + timedelta(days=int(value))
+            return datetime.combine(day, datetime_time(hour=1))
         divisor = 1_000
         if magnitude >= 100_000_000_000_000_000:
             divisor = 1_000_000_000
         elif magnitude >= 100_000_000_000_000:
             divisor = 1_000_000
-        return datetime.fromtimestamp(
-            float(value) / divisor, timezone.utc
-        ).date()
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+        return floor_to_hour(datetime.fromtimestamp(float(value) / divisor, timezone.utc))
+    text = str(value)
+    if "T" not in text and " " not in text:
+        parsed_date = date.fromisoformat(text.rstrip("Z"))
+        return datetime.combine(parsed_date, datetime_time(hour=1))
+    return floor_to_hour(datetime.fromisoformat(text.replace("Z", "+00:00")))
+
+
+def partition_day(record: dict[str, Any], table: TableConfig) -> date:
+    """Backward-compatible helper for callers that need only the calendar day."""
+    return partition_hour(record, table).date()
 
 
 def normalized_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -238,18 +342,21 @@ class S3Writer:
         partition: int,
         rows: list[dict[str, Any]],
     ) -> tuple[str, str]:
-        groups: dict[date, list[dict[str, Any]]] = defaultdict(list)
+        groups: dict[datetime, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
-            groups[partition_day(row, table)].append(row)
+            groups[partition_hour(row, table)].append(row)
         prefix = str(self.config.get("prefix", "")).strip("/")
         latest_row = max(rows, key=lambda row: int(row["_cdc_kafka_offset"]))
-        latest_day = partition_day(latest_row, table)
+        latest_hour = partition_hour(latest_row, table)
         latest_object_key = ""
-        for day, day_rows in groups.items():
-            start_offset = min(int(row["_cdc_kafka_offset"]) for row in day_rows)
-            end_offset = max(int(row["_cdc_kafka_offset"]) for row in day_rows)
+        for hour, hour_rows in groups.items():
+            start_offset = min(int(row["_cdc_kafka_offset"]) for row in hour_rows)
+            end_offset = max(int(row["_cdc_kafka_offset"]) for row in hour_rows)
             directory = "/".join(part for part in (prefix, table.key.strip("/")) if part)
-            directory += f"/year={day.year:04d}/month={day.month:02d}/day={day.day:02d}"
+            directory += (
+                f"/year={hour.year:04d}/month={hour.month:02d}/"
+                f"day={hour.day:02d}/hour={hour.hour:02d}"
+            )
             topic_token = hashlib.sha256(topic.encode()).hexdigest()[:12]
             filename = (
                 f"part-t{topic_token}-p{partition:05d}-"
@@ -259,7 +366,7 @@ class S3Writer:
             with tempfile.TemporaryDirectory(prefix="mysql-cdc-") as temporary:
                 path = Path(temporary) / filename
                 try:
-                    arrow_table = pa.Table.from_pylist(normalized_rows(day_rows))
+                    arrow_table = pa.Table.from_pylist(normalized_rows(hour_rows))
                     pq.write_table(arrow_table, path, compression="snappy")
                 except (pa.ArrowException, TypeError, ValueError, OverflowError) as exc:
                     raise SchemaEvolutionError(
@@ -269,10 +376,10 @@ class S3Writer:
             LOG.info(
                 "Uploaded %d CDC rows to s3://%s/%s "
                 "[topic=%s partition=%d offsets=%d-%d]",
-                len(day_rows), self.config["bucket"], object_key,
+                len(hour_rows), self.config["bucket"], object_key,
                 topic, partition, start_offset, end_offset,
             )
-            if day == latest_day:
+            if hour == latest_hour:
                 latest_object_key = object_key
         return str(latest_row["lsn"]), latest_object_key
 
@@ -388,7 +495,9 @@ def main() -> None:
     last_flush = time.monotonic()
     last_marker: tuple[int, ...] | None = None
     last_missing_topic_warning = 0.0
+    last_temporal_refresh = 0.0
     mapping: dict[str, TableConfig] = {}
+    columns: dict[tuple[str, str, str], dict[str, str]] = {}
     try:
         while not stopping:
             if not buffered:
@@ -400,12 +509,23 @@ def main() -> None:
                 marker = (stat.st_mtime_ns, stat.st_size, *control_marker)
                 if marker != last_marker:
                     mapping = topic_map()
+                    columns = temporal_columns()
+                    last_temporal_refresh = time.monotonic()
                     if mapping:
                         consumer.subscribe(sorted(mapping))
                     else:
                         consumer.unsubscribe()
                     last_marker = marker
-                    LOG.info("Subscribed to %d enabled table topic(s)", len(mapping))
+                    LOG.info(
+                        "Subscribed to %d enabled table topic(s); loaded temporal "
+                        "metadata for %d table(s)",
+                        len(mapping), len(columns),
+                    )
+                elif time.monotonic() - last_temporal_refresh >= 300:
+                    # Refresh independently of tables.yml so an ALTER TABLE
+                    # adding a temporal column is picked up while running.
+                    columns = temporal_columns()
+                    last_temporal_refresh = time.monotonic()
             message = consumer.poll(1.0)
             if message is not None:
                 if message.error():
@@ -427,7 +547,10 @@ def main() -> None:
                     table = mapping.get(message.topic())
                     if table is not None:
                         envelope = json.loads(message.value()) if message.value() else None
-                        record = event_record(envelope, message, table) if envelope else None
+                        record = (
+                            event_record(envelope, message, table, columns)
+                            if envelope else None
+                        )
                         buffered.append((message, table, record))
             if buffered and (len(buffered) >= batch_size or time.monotonic() - last_flush >= flush_seconds):
                 try:

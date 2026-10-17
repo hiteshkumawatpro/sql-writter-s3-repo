@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -80,6 +81,46 @@ class ConnectorScopeTests(unittest.TestCase):
 
 
 class SnapshotLifecycleTests(unittest.TestCase):
+    def test_connector_requests_iso_temporal_values(self):
+        config = connectors.build_connector(database(), [table()])
+        self.assertEqual(config["time.precision.mode"], "isostring")
+
+    def test_datetime_partition_is_floored_to_exact_hour(self):
+        configured = table()
+        configured.partition_column = "created_at"
+        result = sink.partition_hour(
+            {"created_at": datetime(2026, 10, 18, 14, 35, 22)}, configured
+        )
+        self.assertEqual(result, datetime(2026, 10, 18, 14))
+
+    def test_date_only_partition_uses_hour_one(self):
+        configured = table()
+        configured.partition_column = "business_date"
+        result = sink.partition_hour(
+            {"business_date": date(2026, 10, 18)}, configured
+        )
+        self.assertEqual(result, datetime(2026, 10, 18, 1))
+
+    def test_missing_configured_partition_time_uses_event_date_hour_one(self):
+        configured = table()
+        configured.partition_column = "created_at"
+        result = sink.partition_hour(
+            {"created_at": None, "_cdc_event_ts_ms": 1792323322000}, configured
+        )
+        self.assertEqual(result.hour, 1)
+
+    def test_temporal_values_become_native_types(self):
+        self.assertEqual(
+            sink.normalize_temporal_value(20740, "date"), date(2026, 10, 14)
+        )
+        value = sink.normalize_temporal_value(1792323322000, "datetime")
+        self.assertIsInstance(value, datetime)
+        self.assertIsNone(value.tzinfo)
+        timestamp = sink.normalize_temporal_value(
+            "2026-10-18T14:15:22Z", "timestamp"
+        )
+        self.assertEqual(timestamp.tzinfo, timezone.utc)
+
     def test_runtime_snapshot_state_is_durable(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"

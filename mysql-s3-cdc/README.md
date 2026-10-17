@@ -218,7 +218,7 @@ Every successful object upload is logged with its CDC row count, full S3 URI,
 Kafka topic, partition, and offset range, for example:
 
 ```text
-2026-10-12 06:59:07,960 | INFO | KafkaS3Archive | Uploaded 3 CDC rows to s3://bucket/prefix/table/year=2026/month=10/day=12/part-p00000-o00000000000000000100-00000000000000000102.parquet [topic=source.database.table partition=0 offsets=100-102]
+2026-10-12 06:59:07,960 | INFO | KafkaS3Archive | Uploaded 3 CDC rows to s3://bucket/prefix/table/year=2026/month=10/day=12/hour=06/part-p00000-o00000000000000000100-00000000000000000102.parquet [topic=source.database.table partition=0 offsets=100-102]
 ```
 
 `status` includes the five latest S3 activity lines. Use
@@ -429,11 +429,25 @@ bucket in the configured region.
 ## S3 output and ordering
 
 ```text
-s3://BUCKET/PREFIX/<table key>/year=YYYY/month=MM/day=DD/
+s3://BUCKET/PREFIX/<table key>/year=YYYY/month=MM/day=DD/hour=HH/
   part-p00000-o00000000000000000100-00000000000000000199.parquet
 ```
 
 Delivery is at least once. Kafka offsets commit only after successful S3 uploads; deterministic object names make retries overwrite the same object.
+
+The configured `partition_column` determines the S3 calendar partition. A
+datetime value uses its exact hour. A date-only value, or a null/missing value
+in a configured partition column, is placed under `hour=01`; null/missing
+values use the CDC event date. When `partition_column` is null, the CDC event
+timestamp supplies both the date and hour.
+
+MySQL `DATE`, `TIME`, `DATETIME`, and `TIMESTAMP` source columns are normalized
+before upload and stored using Parquet temporal logical types rather than
+Debezium epoch numbers. This preserves the source column while making temporal
+filters work in Parquet-aware query engines. The generated connector uses
+Debezium ISO temporal encoding, and the sink also decodes older numeric events
+that may already be waiting in Kafka. Temporal metadata refreshes every five
+minutes, including after supported `ALTER TABLE` changes.
 
 Every row contains the source columns plus `lsn`, `_cdc_operation`, source/table identity, event timestamp, binlog file/position/row, GTID, transaction ID, and Kafka topic/partition/offset. `lsn` is a zero-padded `binlog-file-number:position:row`, sortable within one MySQL source/table. It is not a global clock across independent MySQL servers.
 

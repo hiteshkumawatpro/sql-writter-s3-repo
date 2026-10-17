@@ -6,7 +6,7 @@ import argparse
 import logging
 import tempfile
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +15,29 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .config import TableConfig, load_databases, load_s3, load_tables
-from .sink import S3Writer, normalized_rows, partition_day
+from .sink import S3Writer, normalized_rows, partition_hour
 
 
 LOG = logging.getLogger("MySQLS3Backfill")
+
+
+def normalize_mysql_temporals(record: dict[str, Any]) -> dict[str, Any]:
+    """Keep MySQL temporal fields as Arrow-compatible logical values."""
+    normalized = dict(record)
+    for column, value in normalized.items():
+        # mysql-connector represents MySQL TIME as timedelta. Arrow needs a
+        # native time value. Values outside a clock day remain strings because
+        # MySQL TIME also supports durations beyond 24 hours.
+        if isinstance(value, timedelta):
+            total_micros = int(value.total_seconds() * 1_000_000)
+            if 0 <= total_micros < 86_400_000_000:
+                hours, remainder = divmod(total_micros, 3_600_000_000)
+                minutes, remainder = divmod(remainder, 60_000_000)
+                seconds, micros = divmod(remainder, 1_000_000)
+                normalized[column] = datetime_time(hours, minutes, seconds, micros)
+            else:
+                normalized[column] = str(value)
+    return normalized
 
 
 def configured_source(source_name: str) -> dict[str, Any]:
@@ -55,7 +74,7 @@ def snapshot_metadata(
     snapshot_time: datetime,
     run_id: str,
 ) -> dict[str, Any]:
-    record = dict(row)
+    record = normalize_mysql_temporals(row)
     record.update({
         "lsn": None,
         "_cdc_operation": "snapshot",
@@ -84,37 +103,38 @@ def upload_batch(
     batch_number: int,
     run_id: str,
 ) -> tuple[int, int]:
-    groups: dict[date, list[dict[str, Any]]] = defaultdict(list)
+    groups: dict[datetime, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        groups[partition_day(row, table)].append(row)
+        groups[partition_hour(row, table)].append(row)
 
     prefix = str(writer.config.get("prefix") or "").strip("/")
     uploaded_rows = 0
     uploaded_files = 0
-    for day, day_rows in groups.items():
+    for hour, hour_rows in groups.items():
         directory = "/".join(
             part for part in (prefix, table.key.strip("/")) if part
         )
         directory += (
-            f"/year={day.year:04d}/month={day.month:02d}/day={day.day:02d}"
+            f"/year={hour.year:04d}/month={hour.month:02d}/"
+            f"day={hour.day:02d}/hour={hour.hour:02d}"
         )
         filename = f"backfill-{run_id}-b{batch_number:08d}.snappy.parquet"
         object_key = f"{directory}/{filename}"
         with tempfile.TemporaryDirectory(prefix="mysql-cdc-backfill-") as temporary:
             path = Path(temporary) / filename
             pq.write_table(
-                pa.Table.from_pylist(normalized_rows(day_rows)),
+                pa.Table.from_pylist(normalized_rows(hour_rows)),
                 path,
                 compression="snappy",
             )
             writer.client.upload_file(
                 str(path), writer.config["bucket"], object_key
             )
-        uploaded_rows += len(day_rows)
+        uploaded_rows += len(hour_rows)
         uploaded_files += 1
         LOG.info(
             "Uploaded %d BACKFILL rows to s3://%s/%s",
-            len(day_rows), writer.config["bucket"], object_key,
+            len(hour_rows), writer.config["bucket"], object_key,
         )
     return uploaded_rows, uploaded_files
 

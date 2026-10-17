@@ -73,6 +73,9 @@ def build_connector(db: dict[str, Any], tables) -> dict[str, str]:
         "database.ssl.mode": str(db.get("ssl_mode", "preferred")),
         "decimal.handling.mode": "string",
         "binary.handling.mode": "base64",
+        # Emit DATE/TIME/DATETIME values as ISO text. The sink converts these
+        # into native Arrow temporal values before writing Parquet.
+        "time.precision.mode": "isostring",
         "tombstones.on.delete": "false",
     }
     if db.get("connection_time_zone"):
